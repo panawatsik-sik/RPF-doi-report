@@ -217,8 +217,9 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const GROWTH_STAGES = ['พักตัว','แตกใบ/แตกตา','ติดดอก','ติดผลอ่อน','ผลแก่ใกล้เก็บเกี่ยว','เก็บเกี่ยวแล้ว'];
@@ -489,23 +490,46 @@ async function renderSeasonTab(container, doiId){
 
   const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
 
+  // ดึงพันธุ์ทั้งหมดที่เกี่ยวข้องกับชนิดผลไม้ของดอยนี้ มาไว้ให้เลือกตอนเปิดฤดูกาล
+  const fruitNamesInDoi = fruits.map(f => f.name);
+  let varietiesByFruit = {};
+  if(fruitNamesInDoi.length > 0){
+    const { data: varietyRows } = await sb.from('fruit_varieties').select('fruit_name, variety_name').in('fruit_name', fruitNamesInDoi);
+    (varietyRows||[]).forEach(v => {
+      if(!varietiesByFruit[v.fruit_name]) varietiesByFruit[v.fruit_name] = [];
+      varietiesByFruit[v.fruit_name].push(v.variety_name);
+    });
+  }
+  function varietyOptionsFor(fruitId){
+    const fruit = fruits.find(f => String(f.id) === String(fruitId));
+    const list = (fruit && varietiesByFruit[fruit.name]) || [];
+    return `<option value="">— ไม่ระบุพันธุ์ —</option>` + list.map(v => `<option value="${v}">${v}</option>`).join('');
+  }
+
   container.innerHTML = `
     <div class="card">
       <h3>เปิดฤดูกาลใหม่</h3>
       <div id="seasonMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="newSeasonFruit">${fruitOptions}</select></div>
+        <div class="field"><label>พันธุ์ (ถ้ามี)</label><select id="newSeasonVariety">${varietyOptionsFor(fruits[0] ? fruits[0].id : null)}</select></div>
         <div class="field"><label>ปีงบประมาณ</label><select id="newSeasonLabel">${fiscalYearOptions().map(y => `<option value="${y}" ${y===currentFiscalYearBE()?'selected':''}>ปีงบประมาณ ${y}</option>`).join('')}</select></div>
         <div class="field"><label>ประมาณการผลผลิต (กก.)</label><input type="number" step="0.01" id="newSeasonEst"></div>
         <div class="field"><label>วันที่คาดว่าจะเก็บเกี่ยว</label><input type="date" id="newSeasonHarvest"></div>
       </div>
+      <p class="muted">ถ้ายังไม่เห็นพันธุ์ที่ต้องการในรายการ ให้แจ้งทีมส่วนกลางเพิ่มผ่านหน้า "จัดการพันธุ์" ก่อน (ป้องกันชื่อพันธุ์สะกดไม่ตรงกันข้ามดอย)</p>
       <button class="btn-primary" id="createSeasonBtn">เปิดฤดูกาล</button>
     </div>
     <div id="seasonList"></div>
   `;
 
+  document.getElementById('newSeasonFruit').onchange = (e) => {
+    document.getElementById('newSeasonVariety').innerHTML = varietyOptionsFor(e.target.value);
+  };
+
   document.getElementById('createSeasonBtn').onclick = async () => {
     const fruit_type_id = document.getElementById('newSeasonFruit').value;
+    const variety_name = document.getElementById('newSeasonVariety').value || null;
     const year_label = document.getElementById('newSeasonLabel').value.trim();
     const estimated_yield = parseFloat(document.getElementById('newSeasonEst').value) || null;
     const expected_harvest_date = document.getElementById('newSeasonHarvest').value || null;
@@ -514,7 +538,7 @@ async function renderSeasonTab(container, doiId){
       return;
     }
     const { error } = await sb.from('seasons').insert({
-      doi_id: doiId, fruit_type_id, year_label, estimated_yield, expected_harvest_date, created_by: state.profile.id
+      doi_id: doiId, fruit_type_id, variety_name, year_label, estimated_yield, expected_harvest_date, created_by: state.profile.id
     });
     if(error){ document.getElementById('seasonMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
     renderSeasonTab(container, doiId);
@@ -543,7 +567,7 @@ async function renderSeasonTab(container, doiId){
     return `
       <div class="season-block">
         <div class="head">
-          <div><strong>${s.fruit_types.name}</strong> — ปีงบประมาณ ${s.year_label}
+          <div><strong>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</strong> — ปีงบประมาณ ${s.year_label}
             <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
           </div>
           <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม: ${totalShipped.toLocaleString()} กก.</div>
@@ -916,7 +940,7 @@ async function renderTableTab(container, fruitFilter){
     const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
     return `<tr>
       <td>${s.doi.name}</td>
-      <td>${s.fruit_types.name}</td>
+      <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
       <td>${g ? `<span class="badge badge-green">${g.status}</span>` : '<span class="muted">ยังไม่มีรายงาน</span>'}</td>
       <td>${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'}</td>
       <td>${totalShipped.toLocaleString()} กก.</td>
@@ -1181,7 +1205,7 @@ async function generateReport(fruitFilter){
     const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
     return `<tr>
       <td>${s.doi.name}</td>
-      <td>${s.fruit_types.name}</td>
+      <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
       <td>${s.year_label}</td>
       <td>${g ? g.status : '—'}</td>
       <td style="text-align:right;">${s.estimated_yield ? Number(s.estimated_yield).toLocaleString() : '—'}</td>
