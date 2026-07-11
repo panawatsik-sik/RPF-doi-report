@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบรายงานผลผลิตไม้ผล | โครงการหลวง</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+Thai:wght@500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+
+<style>
+  :root{
+    --bg: #F3F5EE;
+    --panel: #FFFFFF;
+    --pine: #1F4B3F;
+    --pine-dark: #143128;
+    --pine-light: #E7EFE9;
+    --gold: #D99A2B;
+    --gold-light: #FBEBCB;
+    --clay: #B84B32;
+    --clay-light: #F7E1DA;
+    --ink: #24302B;
+    --ink-soft: #5B675F;
+    --line: #DDE3D9;
+    --radius: 10px;
+  }
+  *{ box-sizing: border-box; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Noto Sans Thai', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,h2,h3,h4{
+    font-family: 'Noto Serif Thai', serif;
+    color: var(--pine-dark);
+    margin: 0 0 .4em 0;
+  }
+  a{ color: var(--pine); }
+  button{
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    font-size: 14.5px;
+  }
+  .btn-primary{ background: var(--pine); color: #fff; }
+  .btn-primary:hover{ background: var(--pine-dark); }
+  .btn-secondary{ background: var(--pine-light); color: var(--pine-dark); }
+  .btn-secondary:hover{ background: #d9e6dd; }
+  .btn-ghost{ background: transparent; color: var(--ink-soft); }
+  .btn-ghost:hover{ color: var(--ink); }
+  .btn-danger{ background: var(--clay); color: #fff; }
+  button:disabled{ opacity: .55; cursor: not-allowed; }
+
+  input, select, textarea{
+    font-family: inherit;
+    font-size: 14.5px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    width: 100%;
+    color: var(--ink);
+  }
+  input:focus, select:focus, textarea:focus{
+    outline: 2px solid var(--gold);
+    outline-offset: 1px;
+    border-color: var(--gold);
+  }
+  label{ font-size: 13.5px; font-weight: 600; color: var(--ink-soft); display:block; margin-bottom:4px; }
+  .field{ margin-bottom: 14px; }
+
+  /* ---- topbar with a subtle contour-line motif (mountains / doi) ---- */
+  #topbar{
+    background: var(--pine-dark);
+    color: #fff;
+    padding: 0 24px;
+    height: 62px;
+    display:flex; align-items:center; justify-content:space-between;
+    position: relative;
+    overflow: hidden;
+  }
+  #topbar::before{
+    content:"";
+    position:absolute; inset:0;
+    background-image:
+      radial-gradient(circle at 15% 120%, rgba(217,154,43,0.18) 0%, transparent 45%),
+      radial-gradient(circle at 45% 150%, rgba(217,154,43,0.12) 0%, transparent 50%),
+      radial-gradient(circle at 80% 130%, rgba(217,154,43,0.15) 0%, transparent 45%);
+    pointer-events:none;
+  }
+  #topbar .brand{ display:flex; align-items:center; gap:10px; z-index:1; }
+  #topbar .brand .mark{
+    width:34px; height:34px; border-radius:50%;
+    background: var(--gold);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Noto Serif Thai',serif; font-weight:700; color: var(--pine-dark);
+    font-size: 16px;
+  }
+  #topbar .brand-text{ line-height:1.15; }
+  #topbar .brand-text .t1{ font-family:'Noto Serif Thai',serif; font-weight:600; font-size:16px; }
+  #topbar .brand-text .t2{ font-size:12px; color:#C9D6CD; }
+  #topbar .user{ display:flex; align-items:center; gap:12px; z-index:1; font-size:13.5px; }
+  #topbar .user .name{ font-weight:600; }
+  #topbar .user .role-tag{
+    background: rgba(255,255,255,.12);
+    padding: 3px 9px; border-radius: 20px; font-size: 12px;
+  }
+
+  #app{ max-width: 1180px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  .card{
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px;
+    margin-bottom: 18px;
+  }
+  .card h3{ font-size: 17px; margin-bottom: 14px; }
+
+  .auth-wrap{
+    max-width: 420px; margin: 60px auto; text-align:center;
+  }
+  .auth-wrap .mark-big{
+    width:56px;height:56px;border-radius:50%;background:var(--gold);
+    display:flex;align-items:center;justify-content:center;margin:0 auto 16px;
+    font-family:'Noto Serif Thai',serif;font-weight:700;color:var(--pine-dark);font-size:26px;
+  }
+  .tabs{
+    display:flex; gap:6px; border-bottom: 1px solid var(--line);
+    margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .tab{
+    padding: 10px 16px; border-radius: 8px 8px 0 0;
+    background: transparent; color: var(--ink-soft); font-weight:600;
+    border-bottom: 3px solid transparent;
+  }
+  .tab.active{ color: var(--pine-dark); border-bottom: 3px solid var(--gold); background: var(--pine-light); }
+
+  .grid-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px){ .grid-2{ grid-template-columns: 1fr; } }
+
+  table{ width:100%; border-collapse: collapse; font-size: 13.8px; }
+  th, td{ text-align:left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th{ color: var(--ink-soft); font-weight:600; font-size: 12.5px; text-transform: uppercase; letter-spacing:.02em; }
+  tr:last-child td{ border-bottom:none; }
+
+  .badge{ display:inline-block; padding: 3px 10px; border-radius: 20px; font-size:12px; font-weight:600; }
+  .badge-green{ background: var(--pine-light); color: var(--pine-dark); }
+  .badge-gold{ background: var(--gold-light); color: #8a5f10; }
+  .badge-clay{ background: var(--clay-light); color: var(--clay); }
+  .badge-gray{ background:#eee; color:#666; }
+
+  #map{ height: 420px; border-radius: var(--radius); border:1px solid var(--line); }
+
+  .msg{ padding: 10px 14px; border-radius: 8px; font-size: 13.5px; margin-bottom: 14px; }
+  .msg-error{ background: var(--clay-light); color: var(--clay); }
+  .msg-ok{ background: var(--pine-light); color: var(--pine-dark); }
+
+  .empty{ color: var(--ink-soft); font-size: 13.5px; padding: 18px 0; text-align:center; }
+
+  .season-block{ border:1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+  .season-block .head{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; flex-wrap:wrap; gap:6px;}
+  .muted{ color: var(--ink-soft); font-size: 12.8px; }
+
+  footer.hint{ text-align:center; color: var(--ink-soft); font-size:12.5px; margin-top: 30px; }
+
+  #printReport{ display:none; }
+  @media print{
+    body *{ visibility: hidden; }
+    #printReport, #printReport *{ visibility: visible; }
+    #printReport{ display:block; position: absolute; top:0; left:0; width:100%; padding: 20px; }
+    #printReport table{ font-size: 12px; }
+    #printReport .rpt-header{ border-bottom: 2px solid #1F4B3F; padding-bottom: 10px; margin-bottom: 16px; }
+  }
+  .rpt-header h1{ margin-bottom: 2px; }
+  .rpt-meta{ color:#555; font-size: 12.5px; margin-bottom: 4px; }
+  .rpt-section{ margin-top: 22px; }
+  .rpt-section h2{ font-family:'Noto Serif Thai',serif; font-size: 16px; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 10px; }
+  .rpt-stats{ display:flex; gap: 20px; margin: 10px 0; }
+  .rpt-stat{ border:1px solid #ccc; border-radius: 6px; padding: 8px 14px; }
+  .rpt-stat .num{ font-size: 20px; font-weight:700; }
+  .rpt-stat .lbl{ font-size: 11.5px; color:#555; }
+</style>
+</head>
+<body>
+
+<div id="topbar" style="display:none;">
+  <div class="brand">
+    <div class="mark">รล</div>
+    <div class="brand-text">
+      <div class="t1">รายงานผลผลิตไม้ผล</div>
+      <div class="t2">โครงการหลวง</div>
+    </div>
+  </div>
+  <div class="user" id="userBox"></div>
+</div>
+
+<div id="app"></div>
+<div id="printReport"></div>
+
+<script>
+/* ============================================================
+   ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
+   (Project Settings → API ใน Supabase Dashboard)
+   ============================================================ */
+const SUPABASE_URL = 'sb_publishable_cRD2pshNPmoiGS9-XaeBBg_QP_77p3I';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const GROWTH_STAGES = ['พักตัว','แตกใบ/แตกตา','ติดดอก','ติดผลอ่อน','ผลแก่ใกล้เก็บเกี่ยว','เก็บเกี่ยวแล้ว'];
+const DISASTER_TYPES = ['พายุลูกเห็บ','น้ำหลาก/น้ำท่วม','ภัยแล้ง','ลมแรง/วาตภัย','ไฟป่า','อื่นๆ'];
+
+let state = {
+  session: null,
+  profile: null,
+  doiList: [],
+  activeStationTab: 'season',
+  activeCentralTab: 'map',
+  centralFruitFilter: 'all',
+};
+
+const appEl = document.getElementById('app');
+const topbarEl = document.getElementById('topbar');
+const userBoxEl = document.getElementById('userBox');
+
+/* ------------------------------------------------------------
+   Boot / auth state handling
+   ------------------------------------------------------------ */
+async function boot(){
+  const { data: { session } } = await sb.auth.getSession();
+  state.session = session;
+  if(session){
+    await loadProfile();
+  }
+  await loadDoiList();
+  render();
+}
+
+sb.auth.onAuthStateChange(async (_event, session) => {
+  state.session = session;
+  if(session){ await loadProfile(); } else { state.profile = null; }
+  render();
+});
+
+async function loadProfile(){
+  const { data, error } = await sb.from('profiles').select('*, doi(name)').eq('id', state.session.user.id).maybeSingle();
+  if(!error) state.profile = data;
+}
+
+async function loadDoiList(){
+  const { data, error } = await sb.from('doi').select('*').order('name');
+  if(!error) state.doiList = data || [];
+}
+
+/* ------------------------------------------------------------
+   Render router
+   ------------------------------------------------------------ */
+function render(){
+  if(!state.session){
+    topbarEl.style.display = 'none';
+    renderAuth();
+    return;
+  }
+  topbarEl.style.display = 'flex';
+  renderUserBox();
+
+  if(!state.profile){
+    appEl.innerHTML = `<div class="empty">กำลังโหลดโปรไฟล์...</div>`;
+    return;
+  }
+  if(state.profile.status === 'pending'){
+    renderPending();
+    return;
+  }
+  if(state.profile.status === 'rejected'){
+    renderRejected();
+    return;
+  }
+  if(state.profile.role === 'central'){
+    renderCentral();
+  } else {
+    renderStation();
+  }
+}
+
+function renderUserBox(){
+  const p = state.profile;
+  userBoxEl.innerHTML = `
+    <span class="name">${p ? p.full_name : ''}</span>
+    ${p ? `<span class="role-tag">${p.role === 'central' ? 'ส่วนกลาง' : (p.doi ? p.doi.name : 'เจ้าหน้าที่ดอย')}</span>` : ''}
+    <button class="btn-ghost" id="logoutBtn" style="color:#fff;">ออกจากระบบ</button>
+  `;
+  document.getElementById('logoutBtn').onclick = async () => { await sb.auth.signOut(); };
+}
+
+/* ------------------------------------------------------------
+   AUTH VIEW
+   ------------------------------------------------------------ */
+let authMode = 'login';
+function renderAuth(){
+  appEl.innerHTML = `
+    <div class="auth-wrap">
+      <div class="mark-big">รล</div>
+      <h1>ระบบรายงานผลผลิตไม้ผล</h1>
+      <p class="muted" style="margin-bottom:20px;">โครงการหลวง — สาลี่ / กีวีฟรุต / อะโวคาโด / พลับ</p>
+      <div class="card" style="text-align:left;">
+        <div class="tabs">
+          <button class="tab ${authMode==='login'?'active':''}" id="tabLogin">เข้าสู่ระบบ</button>
+          <button class="tab ${authMode==='signup'?'active':''}" id="tabSignup">สมัครสมาชิก</button>
+        </div>
+        <div id="authFormArea"></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('tabLogin').onclick = () => { authMode='login'; renderAuth(); };
+  document.getElementById('tabSignup').onclick = () => { authMode='signup'; renderAuth(); };
+  authMode === 'login' ? renderLoginForm() : renderSignupForm();
+}
+
+function renderLoginForm(){
+  const area = document.getElementById('authFormArea');
+  area.innerHTML = `
+    <div id="authMsg"></div>
+    <div class="field"><label>อีเมล</label><input type="email" id="loginEmail" placeholder="you@example.com"></div>
+    <div class="field"><label>รหัสผ่าน</label><input type="password" id="loginPassword"></div>
+    <button class="btn-primary" style="width:100%;" id="loginBtn">เข้าสู่ระบบ</button>
+  `;
+  document.getElementById('loginBtn').onclick = async () => {
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ...';
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
+    if(error){ showAuthMsg(error.message, true); }
+  };
+}
+
+function renderSignupForm(){
+  const area = document.getElementById('authFormArea');
+  const doiOptions = state.doiList.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  area.innerHTML = `
+    <div id="authMsg"></div>
+    <div class="field"><label>ชื่อ-นามสกุล</label><input type="text" id="suName"></div>
+    <div class="field"><label>อีเมล</label><input type="email" id="suEmail"></div>
+    <div class="field"><label>รหัสผ่าน (อย่างน้อย 6 ตัวอักษร)</label><input type="password" id="suPassword"></div>
+    <div class="field">
+      <label>บทบาท</label>
+      <select id="suRole">
+        <option value="station">เจ้าหน้าที่ดอย</option>
+        <option value="central">ส่วนกลาง</option>
+      </select>
+    </div>
+    <div class="field" id="suDoiField">
+      <label>ดอย</label>
+      <select id="suDoi">${doiOptions || '<option value="">— ยังไม่มีดอยในระบบ —</option>'}</select>
+    </div>
+    <button class="btn-primary" style="width:100%;" id="signupBtn">สมัครสมาชิก</button>
+    <p class="muted" style="margin-top:10px;">หลังสมัคร บัญชีของคุณจะรอการอนุมัติจากทีมส่วนกลางก่อนใช้งานได้</p>
+  `;
+  document.getElementById('suRole').onchange = (e) => {
+    document.getElementById('suDoiField').style.display = e.target.value === 'central' ? 'none' : 'block';
+  };
+  document.getElementById('signupBtn').onclick = async () => {
+    const full_name = document.getElementById('suName').value.trim();
+    const email = document.getElementById('suEmail').value.trim();
+    const password = document.getElementById('suPassword').value;
+    const role = document.getElementById('suRole').value;
+    const doi_id = role === 'station' ? (document.getElementById('suDoi').value || null) : null;
+
+    if(!full_name || !email || password.length < 6){
+      showAuthMsg('กรุณากรอกข้อมูลให้ครบ (รหัสผ่านอย่างน้อย 6 ตัวอักษร)', true); return;
+    }
+    if(role === 'station' && !doi_id){
+      showAuthMsg('กรุณาเลือกดอย', true); return;
+    }
+    const btn = document.getElementById('signupBtn');
+    btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
+
+    const { data, error } = await sb.auth.signUp({ email, password });
+    if(error){ showAuthMsg(error.message, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return; }
+
+    const userId = data.user ? data.user.id : (data.session ? data.session.user.id : null);
+    if(userId){
+      const { error: profErr } = await sb.from('profiles').insert({
+        id: userId, full_name, email, role, doi_id, status: 'pending'
+      });
+      if(profErr){ showAuthMsg(profErr.message, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return; }
+    }
+    btn.disabled = false; btn.textContent = 'สมัครสมาชิก';
+    showAuthMsg('สมัครสมาชิกสำเร็จ กรุณารอการอนุมัติจากทีมส่วนกลาง (หากระบบเปิดให้ยืนยันอีเมล กรุณาตรวจสอบกล่องอีเมลด้วย)', false);
+  };
+}
+
+function showAuthMsg(text, isError){
+  const el = document.getElementById('authMsg');
+  el.innerHTML = `<div class="msg ${isError?'msg-error':'msg-ok'}">${text}</div>`;
+}
+
+function renderPending(){
+  appEl.innerHTML = `
+    <div class="auth-wrap">
+      <div class="mark-big">⏳</div>
+      <h2>รอการอนุมัติ</h2>
+      <p class="muted">บัญชีของคุณสมัครสำเร็จแล้ว กรุณารอให้ทีมส่วนกลางอนุมัติก่อนเริ่มใช้งาน</p>
+    </div>
+  `;
+}
+function renderRejected(){
+  appEl.innerHTML = `
+    <div class="auth-wrap">
+      <h2>บัญชีนี้ไม่ได้รับการอนุมัติ</h2>
+      <p class="muted">กรุณาติดต่อทีมส่วนกลางหากคิดว่าเกิดข้อผิดพลาด</p>
+    </div>
+  `;
+}
+
+/* ============================================================
+   STATION VIEW (เจ้าหน้าที่ดอย)
+   ============================================================ */
+async function renderStation(){
+  const doiId = state.profile.doi_id;
+  appEl.innerHTML = `
+    <h1>${state.profile.doi ? state.profile.doi.name : 'ดอยของคุณ'}</h1>
+    <div class="tabs" id="stationTabs">
+      <button class="tab ${tabActive('season')}" data-tab="season">ประมาณการผลผลิต &amp; ยอดส่งรายสัปดาห์</button>
+      <button class="tab ${tabActive('growth')}" data-tab="growth">สถานะการเจริญเติบโต</button>
+      <button class="tab ${tabActive('disaster')}" data-tab="disaster">รายงานภัยพิบัติ</button>
+      <button class="tab ${tabActive('fruit')}" data-tab="fruit">ชนิดผลไม้</button>
+    </div>
+    <div id="stationContent"><div class="empty">กำลังโหลด...</div></div>
+  `;
+  document.querySelectorAll('#stationTabs .tab').forEach(btn => {
+    btn.onclick = () => { state.activeStationTab = btn.dataset.tab; renderStation(); };
+  });
+
+  function tabActive(t){ return state.activeStationTab === t ? 'active' : ''; }
+
+  const content = document.getElementById('stationContent');
+  if(state.activeStationTab === 'season') await renderSeasonTab(content, doiId);
+  else if(state.activeStationTab === 'growth') await renderGrowthTab(content, doiId);
+  else if(state.activeStationTab === 'disaster') await renderDisasterTab(content, doiId);
+  else if(state.activeStationTab === 'fruit') await renderFruitTab(content, doiId);
+}
+
+async function getFruitTypes(doiId){
+  const { data } = await sb.from('fruit_types').select('*').eq('doi_id', doiId).order('name');
+  return data || [];
+}
+
+let openEstimateEditors = new Set();
+
+/* ---- Tab: ฤดูกาล / ประมาณการ / ยอดส่งรายสัปดาห์ ---- */
+async function renderSeasonTab(container, doiId){
+  const fruits = await getFruitTypes(doiId);
+  const { data: seasons } = await sb.from('seasons')
+    .select('*, fruit_types(name), weekly_shipments(id, week_start_date, quantity, note, created_at), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name))')
+    .eq('doi_id', doiId).order('created_at', { ascending: false });
+
+  const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>เปิดฤดูกาลใหม่</h3>
+      <div id="seasonMsg"></div>
+      <div class="grid-2">
+        <div class="field"><label>ชนิดผลไม้</label><select id="newSeasonFruit">${fruitOptions}</select></div>
+        <div class="field"><label>ชื่อฤดูกาล</label><input id="newSeasonLabel" placeholder="เช่น 2569"></div>
+        <div class="field"><label>ประมาณการผลผลิต (กก.)</label><input type="number" step="0.01" id="newSeasonEst"></div>
+        <div class="field"><label>วันที่คาดว่าจะเก็บเกี่ยว</label><input type="date" id="newSeasonHarvest"></div>
+      </div>
+      <button class="btn-primary" id="createSeasonBtn">เปิดฤดูกาล</button>
+    </div>
+    <div id="seasonList"></div>
+  `;
+
+  document.getElementById('createSeasonBtn').onclick = async () => {
+    const fruit_type_id = document.getElementById('newSeasonFruit').value;
+    const year_label = document.getElementById('newSeasonLabel').value.trim();
+    const estimated_yield = parseFloat(document.getElementById('newSeasonEst').value) || null;
+    const expected_harvest_date = document.getElementById('newSeasonHarvest').value || null;
+    if(!fruit_type_id || !year_label){
+      document.getElementById('seasonMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกชนิดผลไม้และใส่ชื่อฤดูกาล</div>`;
+      return;
+    }
+    const { error } = await sb.from('seasons').insert({
+      doi_id: doiId, fruit_type_id, year_label, estimated_yield, expected_harvest_date, created_by: state.profile.id
+    });
+    if(error){ document.getElementById('seasonMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+    renderSeasonTab(container, doiId);
+  };
+
+  const listEl = document.getElementById('seasonList');
+  if(!seasons || seasons.length === 0){
+    listEl.innerHTML = `<div class="empty">ยังไม่มีฤดูกาลที่เปิดไว้</div>`;
+    return;
+  }
+  listEl.innerHTML = seasons.map(s => {
+    const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+    const rows = (s.weekly_shipments||[]).sort((a,b)=> new Date(b.week_start_date)-new Date(a.week_start_date))
+      .map(w => `<tr><td>${w.week_start_date}</td><td>${Number(w.quantity).toLocaleString()} กก.</td><td class="muted">${w.note||''}</td></tr>`).join('');
+
+    const revisions = (s.season_revisions||[]).sort((a,b)=> new Date(b.created_at)-new Date(a.created_at));
+    const revisionRows = revisions.map(r => `<tr>
+        <td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td>
+        <td>${r.previous_estimated_yield!=null ? Number(r.previous_estimated_yield).toLocaleString() : '—'} → ${Number(r.new_estimated_yield).toLocaleString()} กก.</td>
+        <td class="muted">${r.reason}</td>
+        <td class="muted">${r.profiles ? r.profiles.full_name : ''}</td>
+      </tr>`).join('');
+
+    const editorOpen = openEstimateEditors.has(s.id);
+
+    return `
+      <div class="season-block">
+        <div class="head">
+          <div><strong>${s.fruit_types.name}</strong> — ฤดูกาล ${s.year_label}
+            <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
+          </div>
+          <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม: ${totalShipped.toLocaleString()} กก.</div>
+        </div>
+
+        <button class="btn-ghost" data-toggle-estimate="${s.id}" style="padding:4px 0; color:var(--pine);">
+          ${editorOpen ? 'ยกเลิกการแก้ไขประมาณการ' : 'แก้ไขประมาณการ'}
+        </button>
+
+        ${editorOpen ? `
+          <div style="background:var(--pine-light); border-radius:8px; padding:12px; margin:10px 0;">
+            <div class="grid-2">
+              <div class="field"><label>ประมาณการใหม่ (กก.)</label><input type="number" step="0.01" id="est-new-${s.id}" value="${s.estimated_yield||''}"></div>
+            </div>
+            <div class="field"><label>เหตุผลที่ปรับแก้ (จำเป็นต้องระบุ)</label><textarea id="est-reason-${s.id}" rows="2" placeholder="เช่น เจอลูกเห็บทำให้ผลร่วง คาดว่าผลผลิตจะลดลงจากที่ประมาณการไว้เดิม"></textarea></div>
+            <div id="est-msg-${s.id}"></div>
+            <button class="btn-primary" data-save-estimate="${s.id}">บันทึกการแก้ไข</button>
+          </div>
+        ` : ''}
+
+        ${revisionRows ? `
+          <details style="margin: 10px 0;">
+            <summary class="muted" style="cursor:pointer;">ประวัติการแก้ไขประมาณการ (${revisions.length})</summary>
+            <table style="margin-top:8px;">
+              <thead><tr><th>วันที่</th><th>เปลี่ยนจาก → เป็น</th><th>เหตุผล</th><th>ผู้แก้ไข</th></tr></thead>
+              <tbody>${revisionRows}</tbody>
+            </table>
+          </details>
+        ` : ''}
+
+        <table>
+          <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ปริมาณ</th><th>หมายเหตุ</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3" class="muted">ยังไม่มียอดส่งรายสัปดาห์</td></tr>'}</tbody>
+        </table>
+        <div class="grid-2" style="margin-top:12px;">
+          <div class="field"><label>สัปดาห์ที่เริ่ม (วันที่)</label><input type="date" id="wk-date-${s.id}"></div>
+          <div class="field"><label>ปริมาณส่ง (กก.)</label><input type="number" step="0.01" id="wk-qty-${s.id}"></div>
+        </div>
+        <div class="field"><label>หมายเหตุ (ถ้ามี)</label><input id="wk-note-${s.id}"></div>
+        <button class="btn-secondary" data-addweek="${s.id}">+ เพิ่มยอดส่งสัปดาห์นี้</button>
+      </div>
+    `;
+  }).join('');
+
+  listEl.querySelectorAll('button[data-addweek]').forEach(btn => {
+    btn.onclick = async () => {
+      const seasonId = btn.dataset.addweek;
+      const week_start_date = document.getElementById(`wk-date-${seasonId}`).value;
+      const quantity = parseFloat(document.getElementById(`wk-qty-${seasonId}`).value);
+      const note = document.getElementById(`wk-note-${seasonId}`).value.trim();
+      if(!week_start_date || isNaN(quantity)){ alert('กรุณาใส่วันที่และปริมาณให้ครบ'); return; }
+      const { error } = await sb.from('weekly_shipments').insert({
+        season_id: seasonId, week_start_date, quantity, note, reported_by: state.profile.id
+      });
+      if(error){ alert(error.message); return; }
+      renderSeasonTab(container, doiId);
+    };
+  });
+
+  listEl.querySelectorAll('button[data-toggle-estimate]').forEach(btn => {
+    btn.onclick = () => {
+      const seasonId = Number(btn.dataset.toggleEstimate);
+      if(openEstimateEditors.has(seasonId)) openEstimateEditors.delete(seasonId);
+      else openEstimateEditors.add(seasonId);
+      renderSeasonTab(container, doiId);
+    };
+  });
+
+  listEl.querySelectorAll('button[data-save-estimate]').forEach(btn => {
+    btn.onclick = async () => {
+      const seasonId = btn.dataset.saveEstimate;
+      const newVal = parseFloat(document.getElementById(`est-new-${seasonId}`).value);
+      const reason = document.getElementById(`est-reason-${seasonId}`).value.trim();
+      const msgEl = document.getElementById(`est-msg-${seasonId}`);
+      if(isNaN(newVal)){
+        msgEl.innerHTML = `<div class="msg msg-error">กรุณาใส่ตัวเลขประมาณการใหม่</div>`; return;
+      }
+      if(!reason){
+        msgEl.innerHTML = `<div class="msg msg-error">กรุณาระบุเหตุผลที่ปรับแก้ประมาณการ</div>`; return;
+      }
+      const season = seasons.find(s => String(s.id) === String(seasonId));
+      const { error } = await sb.from('season_revisions').insert({
+        season_id: seasonId,
+        previous_estimated_yield: season ? season.estimated_yield : null,
+        new_estimated_yield: newVal,
+        reason,
+        revised_by: state.profile.id
+      });
+      if(error){ msgEl.innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      const { error: updateErr } = await sb.from('seasons').update({ estimated_yield: newVal }).eq('id', seasonId);
+      if(updateErr){ msgEl.innerHTML = `<div class="msg msg-error">${updateErr.message}</div>`; return; }
+      openEstimateEditors.delete(Number(seasonId));
+      renderSeasonTab(container, doiId);
+    };
+  });
+}
+
+/* ---- Tab: สถานะการเจริญเติบโต ---- */
+async function renderGrowthTab(container, doiId){
+  const fruits = await getFruitTypes(doiId);
+  const { data: reports } = await sb.from('growth_reports')
+    .select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }).limit(30);
+
+  const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+  const stageOptions = GROWTH_STAGES.map(s => `<option value="${s}">${s}</option>`).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>รายงานสถานะการเจริญเติบโต</h3>
+      <div id="growthMsg"></div>
+      <div class="grid-2">
+        <div class="field"><label>ชนิดผลไม้</label><select id="growthFruit">${fruitOptions}</select></div>
+        <div class="field"><label>สถานะ</label><select id="growthStatus">${stageOptions}</select></div>
+      </div>
+      <div class="field"><label>หมายเหตุเพิ่มเติม (ถ้ามี)</label><textarea id="growthNote" rows="2" placeholder="เช่น ติดดอก 30% เจอน้ำค้างแข็งบางส่วน"></textarea></div>
+      <div class="field"><label>แนบรูปภาพ (ถ้ามี)</label><input type="file" id="growthPhoto" accept="image/*"></div>
+      <button class="btn-primary" id="saveGrowthBtn">บันทึกรายงาน</button>
+    </div>
+    <div class="card">
+      <h3>ประวัติรายงานล่าสุด</h3>
+      <table>
+        <thead><tr><th>วันที่</th><th>ชนิดผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th>รูป</th></tr></thead>
+        <tbody>
+          ${(reports||[]).map(r => `<tr><td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td><td>${r.fruit_types.name}</td><td><span class="badge badge-green">${r.status}</span></td><td class="muted">${r.note||''}</td><td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปสถานะการเจริญเติบโต" style="width:44px;height:44px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีรายงาน</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById('saveGrowthBtn').onclick = async () => {
+    const btn = document.getElementById('saveGrowthBtn');
+    const fruit_type_id = document.getElementById('growthFruit').value;
+    const status = document.getElementById('growthStatus').value;
+    const note = document.getElementById('growthNote').value.trim();
+    const fileInput = document.getElementById('growthPhoto');
+    if(!fruit_type_id){ document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกชนิดผลไม้</div>`; return; }
+
+    btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+
+    let photo_url = null;
+    if(fileInput.files && fileInput.files[0]){
+      const file = fileInput.files[0];
+      const path = `${doiId}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await sb.storage.from('growth-photos').upload(path, file);
+      if(upErr){
+        document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
+        btn.disabled = false; btn.textContent = 'บันทึกรายงาน'; return;
+      }
+      const { data: pub } = sb.storage.from('growth-photos').getPublicUrl(path);
+      photo_url = pub.publicUrl;
+    }
+
+    const { error } = await sb.from('growth_reports').insert({
+      doi_id: doiId, fruit_type_id, status, note, photo_url, reported_by: state.profile.id
+    });
+    btn.disabled = false; btn.textContent = 'บันทึกรายงาน';
+    if(error){ document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+    renderGrowthTab(container, doiId);
+  };
+}
+
+/* ---- Tab: รายงานภัยพิบัติ ---- */
+async function renderDisasterTab(container, doiId){
+  const fruits = await getFruitTypes(doiId);
+  const { data: reports } = await sb.from('disaster_reports')
+    .select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }).limit(30);
+
+  const fruitOptions = `<option value="">— ทั้งดอย —</option>` + fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+  const typeOptions = DISASTER_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>รายงานภัยพิบัติทางธรรมชาติ</h3>
+      <div id="disasterMsg"></div>
+      <div class="grid-2">
+        <div class="field"><label>ประเภทภัยพิบัติ</label><select id="disType">${typeOptions}</select></div>
+        <div class="field"><label>ชนิดผลไม้ที่กระทบ</label><select id="disFruit">${fruitOptions}</select></div>
+      </div>
+      <div class="field"><label>พื้นที่ที่ได้รับผลกระทบ</label><textarea id="disArea" rows="2" placeholder="เช่น แปลงปลูกฝั่งทิศเหนือของดอย ประมาณ 3 ไร่"></textarea></div>
+      <div class="field"><label>ประมาณการความเสียหาย (%)</label><input type="number" min="0" max="100" step="1" id="disPercent"></div>
+      <div class="field"><label>แนบรูปภาพ</label><input type="file" id="disPhoto" accept="image/*"></div>
+      <button class="btn-danger" id="saveDisasterBtn">ส่งรายงานภัยพิบัติ</button>
+    </div>
+    <div class="card">
+      <h3>ประวัติรายงานภัยพิบัติ</h3>
+      <table>
+        <thead><tr><th>วันที่</th><th>ประเภท</th><th>พื้นที่</th><th>เสียหาย</th><th>สถานะ</th><th>รูป</th></tr></thead>
+        <tbody>
+          ${(reports||[]).map(r => `<tr>
+            <td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td>
+            <td>${r.disaster_type}</td>
+            <td class="muted">${r.affected_area}</td>
+            <td>${r.damage_percent!=null ? r.damage_percent+'%' : '—'}</td>
+            <td><span class="badge ${r.status==='new'?'badge-clay':'badge-green'}">${r.status==='new'?'ใหม่':(r.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td>
+            <td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank">ดูรูป</a>` : '—'}</td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีรายงาน</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById('saveDisasterBtn').onclick = async () => {
+    const btn = document.getElementById('saveDisasterBtn');
+    const disaster_type = document.getElementById('disType').value;
+    const fruit_type_id = document.getElementById('disFruit').value || null;
+    const affected_area = document.getElementById('disArea').value.trim();
+    const damage_percent = document.getElementById('disPercent').value ? parseFloat(document.getElementById('disPercent').value) : null;
+    const fileInput = document.getElementById('disPhoto');
+
+    if(!affected_area){
+      document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">กรุณาระบุพื้นที่ที่ได้รับผลกระทบ</div>`; return;
+    }
+    btn.disabled = true; btn.textContent = 'กำลังส่ง...';
+
+    let photo_url = null;
+    if(fileInput.files && fileInput.files[0]){
+      const file = fileInput.files[0];
+      const path = `${doiId}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await sb.storage.from('disaster-photos').upload(path, file);
+      if(upErr){
+        document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
+        btn.disabled = false; btn.textContent = 'ส่งรายงานภัยพิบัติ'; return;
+      }
+      const { data: pub } = sb.storage.from('disaster-photos').getPublicUrl(path);
+      photo_url = pub.publicUrl;
+    }
+
+    const { error } = await sb.from('disaster_reports').insert({
+      doi_id: doiId, fruit_type_id, disaster_type, affected_area, damage_percent, photo_url, reported_by: state.profile.id
+    });
+    btn.disabled = false; btn.textContent = 'ส่งรายงานภัยพิบัติ';
+    if(error){ document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+    renderDisasterTab(container, doiId);
+  };
+}
+
+/* ---- Tab: จัดการชนิดผลไม้ ---- */
+async function renderFruitTab(container, doiId){
+  const fruits = await getFruitTypes(doiId);
+  container.innerHTML = `
+    <div class="card">
+      <h3>ชนิดผลไม้ของดอยนี้</h3>
+      <div id="fruitMsg"></div>
+      <table>
+        <thead><tr><th>ชื่อ</th><th>เพิ่มเมื่อ</th></tr></thead>
+        <tbody>${fruits.map(f=>`<tr><td>${f.name}</td><td class="muted">${new Date(f.created_at).toLocaleDateString('th-TH')}</td></tr>`).join('')}</tbody>
+      </table>
+      <div class="field" style="margin-top:14px;"><label>เพิ่มชนิดผลไม้ใหม่</label><input id="newFruitName" placeholder="เช่น พลับ, พลัม"></div>
+      <button class="btn-primary" id="addFruitBtn">เพิ่ม</button>
+      <p class="muted" style="margin-top:10px;">เคล็ดลับ: ใช้ชื่อให้สะกดตรงกับดอยอื่นๆ เพื่อให้ส่วนกลางรวมยอดข้ามดอยได้ถูกต้อง เช่น ใช้ "กีวีฟรุต" ไม่ใช่ "กีวี่" สลับกัน</p>
+    </div>
+  `;
+  document.getElementById('addFruitBtn').onclick = async () => {
+    const name = document.getElementById('newFruitName').value.trim();
+    if(!name){ return; }
+    const { error } = await sb.from('fruit_types').insert({ doi_id: doiId, name, created_by: state.profile.id });
+    if(error){ document.getElementById('fruitMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+    renderFruitTab(container, doiId);
+  };
+}
+
+/* ============================================================
+   CENTRAL VIEW (ส่วนกลาง) — Dashboard: แผนที่ / ตาราง / กราฟ
+   ============================================================ */
+async function getAllFruitNames(){
+  const { data } = await sb.from('fruit_types').select('name');
+  const names = Array.from(new Set((data||[]).map(f => f.name)));
+  names.sort((a,b) => a.localeCompare(b, 'th'));
+  return names;
+}
+
+async function renderCentral(){
+  const fruitNames = await getAllFruitNames();
+  const fruitOptions = `<option value="all">ทุกชนิดผลไม้</option>` +
+    fruitNames.map(n => `<option value="${n}" ${state.centralFruitFilter===n?'selected':''}>${n}</option>`).join('');
+
+  appEl.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px;">
+      <h1>ภาพรวมทุกดอย</h1>
+      <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+        <div class="field" style="max-width:220px; margin-bottom:0;">
+          <label>กรองตามชนิดผลไม้</label>
+          <select id="centralFruitSelect">${fruitOptions}</select>
+        </div>
+        <button class="btn-primary" id="genReportBtn">สร้างรายงาน (พิมพ์ / PDF)</button>
+      </div>
+    </div>
+    <div class="tabs" id="centralTabs">
+      <button class="tab ${tabActive('map')}" data-tab="map">แผนที่</button>
+      <button class="tab ${tabActive('table')}" data-tab="table">ตารางรายดอย</button>
+      <button class="tab ${tabActive('chart')}" data-tab="chart">กราฟภาพรวม</button>
+      <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
+    </div>
+    <div id="centralContent"><div class="empty">กำลังโหลด...</div></div>
+  `;
+  document.getElementById('genReportBtn').onclick = () => generateReport(state.centralFruitFilter);
+  document.querySelectorAll('#centralTabs .tab').forEach(btn => {
+    btn.onclick = () => { state.activeCentralTab = btn.dataset.tab; renderCentral(); };
+  });
+  document.getElementById('centralFruitSelect').onchange = (e) => {
+    state.centralFruitFilter = e.target.value; renderCentral();
+  };
+  function tabActive(t){ return state.activeCentralTab === t ? 'active' : ''; }
+
+  const content = document.getElementById('centralContent');
+  const fruitFilter = state.centralFruitFilter;
+  if(state.activeCentralTab === 'map') await renderMapTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'table') await renderTableTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'chart') await renderChartTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'members') await renderMembersTab(content);
+}
+
+async function renderMapTab(container, fruitFilter){
+  container.innerHTML = `<div class="card"><div id="map"></div><p class="muted" style="margin-top:10px;">จุดสีแดง = มีรายงานภัยพิบัติที่ยังไม่ได้รับทราบ${fruitFilter!=='all' ? ` (เฉพาะ${fruitFilter} หรือกระทบทั้งดอย)` : ''} &nbsp;•&nbsp; จุดสีเขียว = ปกติ</p></div>`;
+
+  const { data: disasters } = await sb.from('disaster_reports')
+    .select('doi_id, fruit_type_id, fruit_types(name)').eq('status','new');
+  const relevant = (disasters||[]).filter(d =>
+    fruitFilter === 'all' || d.fruit_type_id === null || (d.fruit_types && d.fruit_types.name === fruitFilter)
+  );
+  const disasterDoiIds = new Set(relevant.map(d=>d.doi_id));
+
+  const map = L.map('map').setView([18.7, 99.0], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  state.doiList.forEach(d => {
+    if(d.latitude == null || d.longitude == null) return;
+    const isAlert = disasterDoiIds.has(d.id);
+    const marker = L.circleMarker([d.latitude, d.longitude], {
+      radius: 9,
+      fillColor: isAlert ? '#B84B32' : '#1F4B3F',
+      color: '#fff', weight: 2, fillOpacity: 0.9
+    }).addTo(map);
+    marker.bindPopup(`<strong>${d.name}</strong><br>${d.province||''}${isAlert ? '<br><span style="color:#B84B32;">⚠ มีรายงานภัยพิบัติใหม่</span>' : ''}`);
+  });
+}
+
+async function renderTableTab(container, fruitFilter){
+  container.innerHTML = `<div class="card"><div class="empty">กำลังรวบรวมข้อมูล...</div></div>`;
+
+  const { data: growth } = await sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false });
+  let seasonsQuery = sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open');
+  const { data: seasonsRaw } = await seasonsQuery;
+  const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
+
+  // latest growth status per doi+fruit
+  const latestGrowth = {};
+  (growth||[]).forEach(g => {
+    const key = `${g.doi_id}-${g.fruit_type_id}`;
+    if(!latestGrowth[key]) latestGrowth[key] = g;
+  });
+
+  const rows = seasons.map(s => {
+    const key = `${s.doi_id}-${s.fruit_type_id}`;
+    const g = latestGrowth[key];
+    const thisWeekTotal = (s.weekly_shipments||[])
+      .filter(w => {
+        const d = new Date(w.week_start_date);
+        const now = new Date();
+        const diffDays = (now - d) / (1000*60*60*24);
+        return diffDays >= 0 && diffDays <= 7;
+      })
+      .reduce((sum,w)=>sum+Number(w.quantity),0);
+    const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+    return `<tr>
+      <td>${s.doi.name}</td>
+      <td>${s.fruit_types.name}</td>
+      <td>${g ? `<span class="badge badge-green">${g.status}</span>` : '<span class="muted">ยังไม่มีรายงาน</span>'}</td>
+      <td>${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'}</td>
+      <td>${totalShipped.toLocaleString()} กก.</td>
+      <td>${thisWeekTotal.toLocaleString()} กก.</td>
+    </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>สรุปสถานะรายดอย${fruitFilter!=='all' ? ` — ${fruitFilter}` : ''} (เฉพาะฤดูกาลที่กำลังดำเนินการ)</h3>
+      <table>
+        <thead><tr><th>ดอย</th><th>ผลไม้</th><th>สถานะการเจริญเติบโตล่าสุด</th><th>ประมาณการ</th><th>ส่งแล้วรวม</th><th>ส่ง 7 วันล่าสุด</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูลฤดูกาลที่เปิดอยู่</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function renderChartTab(container, fruitFilter){
+  container.innerHTML = `<div class="card"><canvas id="overviewChart" height="110"></canvas></div>`;
+
+  const { data: seasonsRaw } = await sb.from('seasons').select('*, fruit_types(name), weekly_shipments(quantity)');
+  const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
+  const byFruit = {};
+  seasons.forEach(s => {
+    const name = s.fruit_types.name;
+    if(!byFruit[name]) byFruit[name] = { estimated: 0, actual: 0 };
+    byFruit[name].estimated += Number(s.estimated_yield || 0);
+    byFruit[name].actual += (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+  });
+
+  const labels = Object.keys(byFruit);
+  const estimatedData = labels.map(l => byFruit[l].estimated);
+  const actualData = labels.map(l => byFruit[l].actual);
+
+  new Chart(document.getElementById('overviewChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'ประมาณการ (กก.)', data: estimatedData, backgroundColor: '#D99A2B' },
+        { label: 'ส่งจริงสะสม (กก.)', data: actualData, backgroundColor: '#1F4B3F' }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom' } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+
+async function renderMembersTab(container){
+  const { data: pending } = await sb.from('profiles').select('*, doi(name)').eq('status','pending').order('created_at');
+  container.innerHTML = `
+    <div class="card">
+      <h3>สมาชิกรอการอนุมัติ</h3>
+      <div id="membersMsg"></div>
+      <table>
+        <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>บทบาท</th><th>ดอย</th><th></th></tr></thead>
+        <tbody>
+          ${(pending||[]).map(p => `<tr>
+            <td>${p.full_name}</td><td class="muted">${p.email}</td>
+            <td>${p.role === 'central' ? 'ส่วนกลาง' : 'เจ้าหน้าที่ดอย'}</td>
+            <td>${p.doi ? p.doi.name : '—'}</td>
+            <td>
+              <button class="btn-secondary" data-approve="${p.id}">อนุมัติ</button>
+              <button class="btn-ghost" data-reject="${p.id}">ปฏิเสธ</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="5" class="muted">ไม่มีสมาชิกรอการอนุมัติ</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+  container.querySelectorAll('button[data-approve]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('profiles').update({ status: 'approved' }).eq('id', btn.dataset.approve);
+      renderMembersTab(container);
+    };
+  });
+  container.querySelectorAll('button[data-reject]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('profiles').update({ status: 'rejected' }).eq('id', btn.dataset.reject);
+      renderMembersTab(container);
+    };
+  });
+}
+
+/* ============================================================
+   รายงานสำหรับพิมพ์ / ส่งให้หน่วยงานอื่น (ฝ่ายวิจัย)
+   ============================================================ */
+async function generateReport(fruitFilter){
+  const btn = document.getElementById('genReportBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'กำลังสร้างรายงาน...'; }
+
+  const [{ data: seasonsRaw }, { data: growth }, { data: disasters }] = await Promise.all([
+    sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open'),
+    sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false }),
+    sb.from('disaster_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false })
+  ]);
+
+  const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
+  const disasterList = (disasters||[]).filter(d => fruitFilter === 'all' || d.fruit_type_id === null || (d.fruit_types && d.fruit_types.name === fruitFilter));
+
+  const latestGrowth = {};
+  (growth||[]).forEach(g => {
+    const key = `${g.doi_id}-${g.fruit_type_id}`;
+    if(!latestGrowth[key]) latestGrowth[key] = g;
+  });
+
+  const doiCovered = new Set(seasons.map(s => s.doi_id));
+  const newDisasterCount = disasterList.filter(d => d.status === 'new').length;
+
+  const tableRows = seasons.map(s => {
+    const key = `${s.doi_id}-${s.fruit_type_id}`;
+    const g = latestGrowth[key];
+    const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+    return `<tr>
+      <td>${s.doi.name}</td>
+      <td>${s.fruit_types.name}</td>
+      <td>${s.year_label}</td>
+      <td>${g ? g.status : '—'}</td>
+      <td style="text-align:right;">${s.estimated_yield ? Number(s.estimated_yield).toLocaleString() : '—'}</td>
+      <td style="text-align:right;">${totalShipped.toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  const disasterRows = disasterList.map(d => `<tr>
+      <td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td>
+      <td>${d.doi.name}</td>
+      <td>${d.disaster_type}</td>
+      <td>${d.affected_area}</td>
+      <td style="text-align:right;">${d.damage_percent!=null ? d.damage_percent+'%' : '—'}</td>
+      <td>${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</td>
+    </tr>`).join('');
+
+  const now = new Date();
+  const reportEl = document.getElementById('printReport');
+  reportEl.innerHTML = `
+    <div class="rpt-header">
+      <h1>รายงานสรุปสถานการณ์ผลผลิตไม้ผล</h1>
+      <div class="rpt-meta">โครงการหลวง ${fruitFilter !== 'all' ? `— เฉพาะ ${fruitFilter}` : '— ทุกชนิดผลไม้'}</div>
+      <div class="rpt-meta">ออกรายงานวันที่ ${now.toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric' })} เวลา ${now.toLocaleTimeString('th-TH')}</div>
+      <div class="rpt-meta">ผู้ออกรายงาน: ${state.profile ? state.profile.full_name : ''}</div>
+    </div>
+
+    <div class="rpt-section">
+      <h2>สรุปภาพรวม</h2>
+      <div class="rpt-stats">
+        <div class="rpt-stat"><div class="num">${state.doiList.length}</div><div class="lbl">ดอยทั้งหมด</div></div>
+        <div class="rpt-stat"><div class="num">${doiCovered.size}</div><div class="lbl">ดอยที่มีข้อมูล${fruitFilter!=='all'?'ของชนิดนี้':''}</div></div>
+        <div class="rpt-stat"><div class="num">${seasons.length}</div><div class="lbl">ฤดูกาลที่กำลังดำเนินการ</div></div>
+        <div class="rpt-stat"><div class="num">${newDisasterCount}</div><div class="lbl">รายงานภัยพิบัติใหม่</div></div>
+      </div>
+    </div>
+
+    <div class="rpt-section">
+      <h2>สถานะรายดอย (เฉพาะฤดูกาลที่กำลังดำเนินการ)</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">ดอย</th>
+          <th style="text-align:left; padding:5px;">ผลไม้</th>
+          <th style="text-align:left; padding:5px;">ฤดูกาล</th>
+          <th style="text-align:left; padding:5px;">สถานะการเจริญเติบโตล่าสุด</th>
+          <th style="text-align:right; padding:5px;">ประมาณการ (กก.)</th>
+          <th style="text-align:right; padding:5px;">ส่งแล้วรวม (กก.)</th>
+        </tr></thead>
+        <tbody>${tableRows || '<tr><td colspan="6" style="padding:8px;">ไม่มีข้อมูล</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="rpt-section">
+      <h2>รายงานภัยพิบัติทางธรรมชาติ</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">วันที่</th>
+          <th style="text-align:left; padding:5px;">ดอย</th>
+          <th style="text-align:left; padding:5px;">ประเภท</th>
+          <th style="text-align:left; padding:5px;">พื้นที่กระทบ</th>
+          <th style="text-align:right; padding:5px;">เสียหาย</th>
+          <th style="text-align:left; padding:5px;">สถานะ</th>
+        </tr></thead>
+        <tbody>${disasterRows || '<tr><td colspan="6" style="padding:8px;">ไม่มีรายงานภัยพิบัติ</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  if(btn){ btn.disabled = false; btn.textContent = 'สร้างรายงาน (พิมพ์ / PDF)'; }
+  window.print();
+}
+
+/* ------------------------------------------------------------ */
+boot();
+</script>
+</body>
+</html>
