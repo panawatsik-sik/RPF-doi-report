@@ -217,13 +217,28 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const GROWTH_STAGES = ['พักตัว','แตกใบ/แตกตา','ติดดอก','ติดผลอ่อน','ผลแก่ใกล้เก็บเกี่ยว','เก็บเกี่ยวแล้ว'];
 const DISASTER_TYPES = ['พายุลูกเห็บ','น้ำหลาก/น้ำท่วม','ภัยแล้ง','ลมแรง/วาตภัย','ไฟป่า','อื่นๆ'];
+
+/* ปีงบประมาณไทย: 1 ต.ค. - 30 ก.ย. เรียกชื่อตามปี พ.ศ. ที่ปีงบประมาณสิ้นสุด */
+function currentFiscalYearBE(){
+  const now = new Date();
+  const month = now.getMonth() + 1; // 1-12
+  const gregorianYear = now.getFullYear();
+  const fiscalGregorianYear = month >= 10 ? gregorianYear + 1 : gregorianYear;
+  return fiscalGregorianYear + 543;
+}
+function fiscalYearOptions(){
+  const current = currentFiscalYearBE();
+  const years = [];
+  for(let y = current - 1; y <= current + 2; y++){ years.push(y); }
+  return years;
+}
 
 let state = {
   session: null,
@@ -232,6 +247,7 @@ let state = {
   activeStationTab: 'season',
   activeCentralTab: 'map',
   centralFruitFilter: 'all',
+  centralVarietyFruit: null,
 };
 
 const appEl = document.getElementById('app');
@@ -480,7 +496,7 @@ async function renderSeasonTab(container, doiId){
       <div id="seasonMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="newSeasonFruit">${fruitOptions}</select></div>
-        <div class="field"><label>ชื่อฤดูกาล</label><input id="newSeasonLabel" placeholder="เช่น 2569"></div>
+        <div class="field"><label>ปีงบประมาณ</label><select id="newSeasonLabel">${fiscalYearOptions().map(y => `<option value="${y}" ${y===currentFiscalYearBE()?'selected':''}>ปีงบประมาณ ${y}</option>`).join('')}</select></div>
         <div class="field"><label>ประมาณการผลผลิต (กก.)</label><input type="number" step="0.01" id="newSeasonEst"></div>
         <div class="field"><label>วันที่คาดว่าจะเก็บเกี่ยว</label><input type="date" id="newSeasonHarvest"></div>
       </div>
@@ -528,7 +544,7 @@ async function renderSeasonTab(container, doiId){
     return `
       <div class="season-block">
         <div class="head">
-          <div><strong>${s.fruit_types.name}</strong> — ฤดูกาล ${s.year_label}
+          <div><strong>${s.fruit_types.name}</strong> — ปีงบประมาณ ${s.year_label}
             <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
           </div>
           <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม: ${totalShipped.toLocaleString()} กก.</div>
@@ -821,6 +837,8 @@ async function renderCentral(){
       <button class="tab ${tabActive('table')}" data-tab="table">ตารางรายดอย</button>
       <button class="tab ${tabActive('chart')}" data-tab="chart">กราฟภาพรวม</button>
       <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
+      <button class="tab ${tabActive('varieties')}" data-tab="varieties">จัดการพันธุ์</button>
+      <button class="tab ${tabActive('doimanage')}" data-tab="doimanage">จัดการดอย</button>
     </div>
     <div id="centralContent"><div class="empty">กำลังโหลด...</div></div>
   `;
@@ -839,6 +857,8 @@ async function renderCentral(){
   else if(state.activeCentralTab === 'table') await renderTableTab(content, fruitFilter);
   else if(state.activeCentralTab === 'chart') await renderChartTab(content, fruitFilter);
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
+  else if(state.activeCentralTab === 'varieties') await renderVarietiesTab(content, fruitNames);
+  else if(state.activeCentralTab === 'doimanage') await renderDoiManageTab(content);
 }
 
 async function renderMapTab(container, fruitFilter){
@@ -986,6 +1006,151 @@ async function renderMembersTab(container){
   });
 }
 
+/* ---- Tab: จัดการพันธุ์ (ส่วนกลางเท่านั้น) ---- */
+async function renderVarietiesTab(container, fruitNames){
+  if(!state.centralVarietyFruit || !fruitNames.includes(state.centralVarietyFruit)){
+    state.centralVarietyFruit = fruitNames[0] || null;
+  }
+  const selectedFruit = state.centralVarietyFruit;
+
+  const fruitOptions = fruitNames.map(n => `<option value="${n}" ${n===selectedFruit?'selected':''}>${n}</option>`).join('');
+
+  let varieties = [];
+  if(selectedFruit){
+    const { data } = await sb.from('fruit_varieties').select('*').eq('fruit_name', selectedFruit).order('variety_name');
+    varieties = data || [];
+  }
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>จัดการพันธุ์ของผลไม้แต่ละชนิด</h3>
+      <p class="muted">รายชื่อพันธุ์ตรงนี้ใช้ร่วมกันได้ทุกดอย ส่วนกลางเป็นผู้ดูแลรายการนี้เพื่อกันชื่อพันธุ์สะกดไม่ตรงกัน</p>
+      <div id="varietyMsg"></div>
+      <div class="field" style="max-width:280px;">
+        <label>เลือกชนิดผลไม้</label>
+        <select id="varietyFruitSelect">${fruitOptions || '<option value="">— ยังไม่มีชนิดผลไม้ในระบบ —</option>'}</select>
+      </div>
+      ${selectedFruit ? `
+      <table style="margin-top:14px;">
+        <thead><tr><th>ชื่อพันธุ์</th><th>เพิ่มเมื่อ</th><th></th></tr></thead>
+        <tbody>
+          ${varieties.map(v => `<tr>
+            <td>${v.variety_name}</td>
+            <td class="muted">${new Date(v.created_at).toLocaleDateString('th-TH')}</td>
+            <td><button class="btn-ghost" data-delete="${v.id}" style="color:var(--clay);">ลบ</button></td>
+          </tr>`).join('') || '<tr><td colspan="3" class="muted">ยังไม่มีพันธุ์บันทึกไว้สำหรับชนิดนี้</td></tr>'}
+        </tbody>
+      </table>
+      <div class="field" style="margin-top:14px;"><label>เพิ่มพันธุ์ใหม่ของ ${selectedFruit}</label><input id="newVarietyName" placeholder="เช่น ฮาส, บัคคาเนีย"></div>
+      <button class="btn-primary" id="addVarietyBtn">เพิ่มพันธุ์</button>
+      ` : ''}
+    </div>
+  `;
+
+  const fruitSelectEl = document.getElementById('varietyFruitSelect');
+  if(fruitSelectEl){
+    fruitSelectEl.onchange = (e) => { state.centralVarietyFruit = e.target.value; renderVarietiesTab(container, fruitNames); };
+  }
+
+  const addBtn = document.getElementById('addVarietyBtn');
+  if(addBtn){
+    addBtn.onclick = async () => {
+      const variety_name = document.getElementById('newVarietyName').value.trim();
+      if(!variety_name){ return; }
+      const { error } = await sb.from('fruit_varieties').insert({
+        fruit_name: selectedFruit, variety_name, created_by: state.profile.id
+      });
+      if(error){ document.getElementById('varietyMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      renderVarietiesTab(container, fruitNames);
+    };
+  }
+
+  container.querySelectorAll('button[data-delete]').forEach(btn => {
+    btn.onclick = async () => {
+      const { error } = await sb.from('fruit_varieties').delete().eq('id', btn.dataset.delete);
+      if(error){ document.getElementById('varietyMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      renderVarietiesTab(container, fruitNames);
+    };
+  });
+}
+
+/* ---- Tab: จัดการดอย (ส่วนกลางเท่านั้น) — เพิ่มดอยใหม่ + แก้ไขพิกัด GPS ---- */
+async function renderDoiManageTab(container){
+  container.innerHTML = `
+    <div class="card">
+      <h3>เพิ่มดอยใหม่</h3>
+      <div id="doiMsg"></div>
+      <div class="grid-2">
+        <div class="field"><label>ชื่อดอย</label><input id="newDoiName" placeholder="เช่น ดอยผาตั้ง"></div>
+        <div class="field"><label>จังหวัด</label><input id="newDoiProvince" placeholder="เช่น เชียงราย"></div>
+        <div class="field"><label>ละติจูด (Latitude)</label><input type="number" step="0.000001" id="newDoiLat" placeholder="เช่น 19.9333"></div>
+        <div class="field"><label>ลองจิจูด (Longitude)</label><input type="number" step="0.000001" id="newDoiLng" placeholder="เช่น 99.0500"></div>
+      </div>
+      <p class="muted">ไม่มีพิกัดตอนนี้ก็เพิ่มดอยได้ก่อน แล้วค่อยกลับมาใส่พิกัดทีหลังได้ในตารางด้านล่าง — ระบบจะสร้างชนิดผลไม้เริ่มต้น 4 ชนิด (สาลี่/กีวีฟรุต/อะโวคาโด/พลับ) ให้อัตโนมัติทันทีที่เพิ่มดอย</p>
+      <button class="btn-primary" id="addDoiBtn">เพิ่มดอย</button>
+    </div>
+    <div class="card">
+      <h3>ดอยทั้งหมด (${state.doiList.length})</h3>
+      <table>
+        <thead><tr><th>ชื่อดอย</th><th>จังหวัด</th><th>ละติจูด</th><th>ลองจิจูด</th><th></th></tr></thead>
+        <tbody>
+          ${state.doiList.map(d => `<tr>
+            <td>${d.name}</td>
+            <td class="muted">${d.province || '—'}</td>
+            <td><input type="number" step="0.000001" style="max-width:130px;" data-lat-for="${d.id}" value="${d.latitude != null ? d.latitude : ''}" placeholder="ยังไม่มี"></td>
+            <td><input type="number" step="0.000001" style="max-width:130px;" data-lng-for="${d.id}" value="${d.longitude != null ? d.longitude : ''}" placeholder="ยังไม่มี"></td>
+            <td><button class="btn-secondary" data-save-coords="${d.id}">บันทึกพิกัด</button></td>
+          </tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีดอยในระบบ</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById('addDoiBtn').onclick = async () => {
+    const btn = document.getElementById('addDoiBtn');
+    const name = document.getElementById('newDoiName').value.trim();
+    const province = document.getElementById('newDoiProvince').value.trim();
+    const latRaw = document.getElementById('newDoiLat').value;
+    const lngRaw = document.getElementById('newDoiLng').value;
+    const latitude = latRaw !== '' ? parseFloat(latRaw) : null;
+    const longitude = lngRaw !== '' ? parseFloat(lngRaw) : null;
+
+    if(!name){
+      document.getElementById('doiMsg').innerHTML = `<div class="msg msg-error">กรุณาใส่ชื่อดอย</div>`;
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'กำลังเพิ่ม...';
+    const { error } = await sb.from('doi').insert({ name, province: province || null, latitude, longitude });
+    btn.disabled = false; btn.textContent = 'เพิ่มดอย';
+    if(error){
+      document.getElementById('doiMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+      return;
+    }
+    await loadDoiList();
+    renderDoiManageTab(container);
+  };
+
+  container.querySelectorAll('button[data-save-coords]').forEach(btn => {
+    btn.onclick = async () => {
+      const doiId = btn.dataset.saveCoords;
+      const latInput = container.querySelector(`input[data-lat-for="${doiId}"]`);
+      const lngInput = container.querySelector(`input[data-lng-for="${doiId}"]`);
+      const latitude = latInput.value !== '' ? parseFloat(latInput.value) : null;
+      const longitude = lngInput.value !== '' ? parseFloat(lngInput.value) : null;
+
+      btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+      const { error } = await sb.from('doi').update({ latitude, longitude }).eq('id', doiId);
+      btn.disabled = false; btn.textContent = 'บันทึกพิกัด';
+      if(error){
+        document.getElementById('doiMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+        return;
+      }
+      await loadDoiList();
+      document.getElementById('doiMsg').innerHTML = `<div class="msg msg-ok">บันทึกพิกัดเรียบร้อย</div>`;
+    };
+  });
+}
+
 /* ============================================================
    รายงานสำหรับพิมพ์ / ส่งให้หน่วยงานอื่น (ฝ่ายวิจัย)
    ============================================================ */
@@ -1060,7 +1225,7 @@ async function generateReport(fruitFilter){
         <thead><tr style="border-bottom:1px solid #999;">
           <th style="text-align:left; padding:5px;">ดอย</th>
           <th style="text-align:left; padding:5px;">ผลไม้</th>
-          <th style="text-align:left; padding:5px;">ฤดูกาล</th>
+          <th style="text-align:left; padding:5px;">ปีงบประมาณ</th>
           <th style="text-align:left; padding:5px;">สถานะการเจริญเติบโตล่าสุด</th>
           <th style="text-align:right; padding:5px;">ประมาณการ (กก.)</th>
           <th style="text-align:right; padding:5px;">ส่งแล้วรวม (กก.)</th>
