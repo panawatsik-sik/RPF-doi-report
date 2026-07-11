@@ -105,7 +105,9 @@
     display:flex; align-items:center; justify-content:center;
     font-family:'Noto Serif Thai',serif; font-weight:700; color: var(--pine-dark);
     font-size: 16px;
+    overflow: hidden;
   }
+  #topbar .brand .mark img{ width:100%; height:100%; object-fit: contain; padding: 4px; box-sizing: border-box; }
   #topbar .brand-text{ line-height:1.15; }
   #topbar .brand-text .t1{ font-family:'Noto Serif Thai',serif; font-weight:600; font-size:16px; }
   #topbar .brand-text .t2{ font-size:12px; color:#C9D6CD; }
@@ -134,7 +136,9 @@
     width:56px;height:56px;border-radius:50%;background:var(--gold);
     display:flex;align-items:center;justify-content:center;margin:0 auto 16px;
     font-family:'Noto Serif Thai',serif;font-weight:700;color:var(--pine-dark);font-size:26px;
+    overflow: hidden;
   }
+  .auth-wrap .mark-big img{ width:100%; height:100%; object-fit: contain; padding: 6px; box-sizing: border-box; }
   .tabs{
     display:flex; gap:6px; border-bottom: 1px solid var(--line);
     margin-bottom: 20px; flex-wrap: wrap;
@@ -196,7 +200,7 @@
 
 <div id="topbar" style="display:none;">
   <div class="brand">
-    <div class="mark">รล</div>
+    <div class="mark"><img src="logo.png" alt="โลโก้มูลนิธิโครงการหลวง" onerror="this.style.display='none'; this.parentElement.textContent='รล';"></div>
     <div class="brand-text">
       <div class="t1">รายงานผลผลิตไม้ผล</div>
       <div class="t2">โครงการหลวง</div>
@@ -213,8 +217,8 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -311,7 +315,7 @@ let authMode = 'login';
 function renderAuth(){
   appEl.innerHTML = `
     <div class="auth-wrap">
-      <div class="mark-big">รล</div>
+      <div class="mark-big"><img src="logo.png" alt="โลโก้มูลนิธิโครงการหลวง" onerror="this.style.display='none'; this.parentElement.textContent='รล';"></div>
       <h1>ระบบรายงานผลผลิตไม้ผล</h1>
       <p class="muted" style="margin-bottom:20px;">โครงการหลวง — สาลี่ / กีวีฟรุต / อะโวคาโด / พลับ</p>
       <div class="card" style="text-align:left;">
