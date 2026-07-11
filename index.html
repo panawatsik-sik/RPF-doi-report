@@ -217,8 +217,8 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -248,6 +248,8 @@ let state = {
   activeCentralTab: 'map',
   centralFruitFilter: 'all',
   centralVarietyFruit: null,
+  centralDataManageSection: 'seasons',
+  centralChartGroupBy: 'fruit',
 };
 
 const appEl = document.getElementById('app');
@@ -884,6 +886,7 @@ async function renderCentral(){
       <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
       <button class="tab ${tabActive('varieties')}" data-tab="varieties">จัดการพันธุ์</button>
       <button class="tab ${tabActive('doimanage')}" data-tab="doimanage">จัดการดอย</button>
+      <button class="tab ${tabActive('datamanage')}" data-tab="datamanage">ลบข้อมูล</button>
     </div>
     <div id="centralContent"><div class="empty">กำลังโหลด...</div></div>
   `;
@@ -904,6 +907,7 @@ async function renderCentral(){
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
   else if(state.activeCentralTab === 'varieties') await renderVarietiesTab(content, fruitNames);
   else if(state.activeCentralTab === 'doimanage') await renderDoiManageTab(content);
+  else if(state.activeCentralTab === 'datamanage') await renderDataManageTab(content);
 }
 
 async function renderMapTab(container, fruitFilter){
@@ -982,21 +986,44 @@ async function renderTableTab(container, fruitFilter){
 }
 
 async function renderChartTab(container, fruitFilter){
-  container.innerHTML = `<div class="card"><canvas id="overviewChart" height="110"></canvas></div>`;
+  const groupBy = state.centralChartGroupBy;
+  container.innerHTML = `
+    <div class="card">
+      <div class="field" style="max-width:260px;">
+        <label>มุมมอง</label>
+        <select id="chartGroupBySelect">
+          <option value="fruit" ${groupBy==='fruit'?'selected':''}>แยกตามชนิดพืช</option>
+          <option value="doi" ${groupBy==='doi'?'selected':''}>แยกตามดอย</option>
+          <option value="variety" ${groupBy==='variety'?'selected':''}>แยกตามพันธุ์</option>
+          <option value="total" ${groupBy==='total'?'selected':''}>ภาพรวมทุกชนิดพืชรวมกัน</option>
+        </select>
+      </div>
+      <canvas id="overviewChart" height="110"></canvas>
+    </div>
+  `;
+  document.getElementById('chartGroupBySelect').onchange = (e) => {
+    state.centralChartGroupBy = e.target.value; renderChartTab(container, fruitFilter);
+  };
 
-  const { data: seasonsRaw } = await sb.from('seasons').select('*, fruit_types(name), weekly_shipments(quantity)');
+  const { data: seasonsRaw } = await sb.from('seasons').select('*, doi(name), fruit_types(name), weekly_shipments(quantity)');
   const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
-  const byFruit = {};
+
+  const grouped = {};
   seasons.forEach(s => {
-    const name = s.fruit_types.name;
-    if(!byFruit[name]) byFruit[name] = { estimated: 0, actual: 0 };
-    byFruit[name].estimated += Number(s.estimated_yield || 0);
-    byFruit[name].actual += (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+    let key;
+    if(groupBy === 'doi') key = s.doi.name;
+    else if(groupBy === 'variety') key = `${s.fruit_types.name} (${s.variety_name || 'ไม่ระบุพันธุ์'})`;
+    else if(groupBy === 'total') key = 'รวมทุกชนิดพืช';
+    else key = s.fruit_types.name; // 'fruit' (default)
+
+    if(!grouped[key]) grouped[key] = { estimated: 0, actual: 0 };
+    grouped[key].estimated += Number(s.estimated_yield || 0);
+    grouped[key].actual += (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
   });
 
-  const labels = Object.keys(byFruit);
-  const estimatedData = labels.map(l => byFruit[l].estimated);
-  const actualData = labels.map(l => byFruit[l].actual);
+  const labels = Object.keys(grouped).sort((a,b) => a.localeCompare(b, 'th'));
+  const estimatedData = labels.map(l => grouped[l].estimated);
+  const actualData = labels.map(l => grouped[l].actual);
 
   new Chart(document.getElementById('overviewChart'), {
     type: 'bar',
@@ -1194,6 +1221,126 @@ async function renderDoiManageTab(container){
       document.getElementById('doiMsg').innerHTML = `<div class="msg msg-ok">บันทึกพิกัดเรียบร้อย</div>`;
     };
   });
+}
+
+/* ---- Tab: ลบข้อมูล (ส่วนกลางเท่านั้น) ---- */
+async function renderDataManageTab(container){
+  const section = state.centralDataManageSection;
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>ลบข้อมูล</h3>
+      <p class="muted">ใช้สำหรับลบข้อมูลที่กรอกผิดพลาดหรือข้อมูลทดสอบ — การลบไม่สามารถกู้คืนได้ ระบบจะขอยืนยันก่อนลบทุกครั้ง</p>
+      <div class="tabs" id="dataManageSubTabs" style="margin-top:10px;">
+        <button class="tab ${section==='seasons'?'active':''}" data-section="seasons">ฤดูกาล / ประมาณการ</button>
+        <button class="tab ${section==='growth'?'active':''}" data-section="growth">รายงานการเจริญเติบโต</button>
+        <button class="tab ${section==='disaster'?'active':''}" data-section="disaster">รายงานภัยพิบัติ</button>
+      </div>
+    </div>
+    <div id="dataManageContent"><div class="empty">กำลังโหลด...</div></div>
+  `;
+
+  container.querySelectorAll('#dataManageSubTabs .tab').forEach(btn => {
+    btn.onclick = () => { state.centralDataManageSection = btn.dataset.section; renderDataManageTab(container); };
+  });
+
+  const contentEl = document.getElementById('dataManageContent');
+
+  if(section === 'seasons'){
+    const { data } = await sb.from('seasons')
+      .select('*, doi(name), fruit_types(name), weekly_shipments(quantity)')
+      .order('created_at', { ascending: false }).limit(150);
+    contentEl.innerHTML = `
+      <div class="card">
+        <div id="deleteMsg"></div>
+        <table>
+          <thead><tr><th>ดอย</th><th>ผลไม้</th><th>ปีงบประมาณ</th><th>ประมาณการ</th><th>ส่งแล้วรวม</th><th></th></tr></thead>
+          <tbody>
+            ${(data||[]).map(s => {
+              const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+              return `<tr>
+                <td>${s.doi.name}</td>
+                <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
+                <td>${s.year_label}</td>
+                <td>${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'}</td>
+                <td>${totalShipped.toLocaleString()} กก.</td>
+                <td><button class="btn-ghost" data-delete-season="${s.id}" style="color:var(--clay);">ลบ</button></td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูล</td></tr>'}
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:8px;">การลบฤดูกาลจะลบยอดส่งรายสัปดาห์และประวัติการแก้ไขประมาณการที่ผูกอยู่ไปด้วยทั้งหมด</p>
+      </div>
+    `;
+    contentEl.querySelectorAll('button[data-delete-season]').forEach(btn => {
+      btn.onclick = async () => {
+        if(!confirm('ยืนยันลบฤดูกาลนี้? ยอดส่งรายสัปดาห์และประวัติการแก้ไขที่ผูกอยู่จะถูกลบไปด้วย และไม่สามารถกู้คืนได้')) return;
+        const { error } = await sb.from('seasons').delete().eq('id', btn.dataset.deleteSeason);
+        if(error){ document.getElementById('deleteMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+        renderDataManageTab(container);
+      };
+    });
+
+  } else if(section === 'growth'){
+    const { data } = await sb.from('growth_reports')
+      .select('*, doi(name), fruit_types(name)').order('created_at', { ascending: false }).limit(150);
+    contentEl.innerHTML = `
+      <div class="card">
+        <div id="deleteMsg"></div>
+        <table>
+          <thead><tr><th>วันที่</th><th>ดอย</th><th>ผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th></th></tr></thead>
+          <tbody>
+            ${(data||[]).map(g => `<tr>
+              <td>${new Date(g.created_at).toLocaleDateString('th-TH')}</td>
+              <td>${g.doi.name}</td>
+              <td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td>
+              <td><span class="badge badge-green">${g.status}</span></td>
+              <td class="muted">${g.note||''}</td>
+              <td><button class="btn-ghost" data-delete-growth="${g.id}" style="color:var(--clay);">ลบ</button></td>
+            </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูล</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+    contentEl.querySelectorAll('button[data-delete-growth]').forEach(btn => {
+      btn.onclick = async () => {
+        if(!confirm('ยืนยันลบรายงานสถานะการเจริญเติบโตนี้? ไม่สามารถกู้คืนได้')) return;
+        const { error } = await sb.from('growth_reports').delete().eq('id', btn.dataset.deleteGrowth);
+        if(error){ document.getElementById('deleteMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+        renderDataManageTab(container);
+      };
+    });
+
+  } else if(section === 'disaster'){
+    const { data } = await sb.from('disaster_reports')
+      .select('*, doi(name), fruit_types(name)').order('created_at', { ascending: false }).limit(150);
+    contentEl.innerHTML = `
+      <div class="card">
+        <div id="deleteMsg"></div>
+        <table>
+          <thead><tr><th>วันที่</th><th>ดอย</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>สถานะ</th><th></th></tr></thead>
+          <tbody>
+            ${(data||[]).map(d => `<tr>
+              <td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td>
+              <td>${d.doi.name}</td>
+              <td>${d.disaster_type}</td>
+              <td class="muted">${d.affected_area}</td>
+              <td>${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</td>
+              <td><button class="btn-ghost" data-delete-disaster="${d.id}" style="color:var(--clay);">ลบ</button></td>
+            </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูล</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+    contentEl.querySelectorAll('button[data-delete-disaster]').forEach(btn => {
+      btn.onclick = async () => {
+        if(!confirm('ยืนยันลบรายงานภัยพิบัตินี้? ไม่สามารถกู้คืนได้')) return;
+        const { error } = await sb.from('disaster_reports').delete().eq('id', btn.dataset.deleteDisaster);
+        if(error){ document.getElementById('deleteMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+        renderDataManageTab(container);
+      };
+    });
+  }
 }
 
 /* ============================================================
