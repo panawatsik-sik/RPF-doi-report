@@ -249,7 +249,8 @@ let state = {
   centralFruitFilter: 'all',
   centralVarietyFruit: null,
   centralDataManageSection: 'seasons',
-  centralChartGroupBy: 'fruit',
+  centralChartFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
+  centralDisasterTrackFilters: { doiId: 'all', status: 'all' },
 };
 
 const appEl = document.getElementById('app');
@@ -881,6 +882,7 @@ async function renderCentral(){
     </div>
     <div class="tabs" id="centralTabs">
       <button class="tab ${tabActive('map')}" data-tab="map">แผนที่</button>
+      <button class="tab ${tabActive('disastertrack')}" data-tab="disastertrack">ติดตามภัยพิบัติ</button>
       <button class="tab ${tabActive('table')}" data-tab="table">ตารางรายดอย</button>
       <button class="tab ${tabActive('chart')}" data-tab="chart">กราฟภาพรวม</button>
       <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
@@ -902,8 +904,9 @@ async function renderCentral(){
   const content = document.getElementById('centralContent');
   const fruitFilter = state.centralFruitFilter;
   if(state.activeCentralTab === 'map') await renderMapTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'disastertrack') await renderDisasterTrackTab(content);
   else if(state.activeCentralTab === 'table') await renderTableTab(content, fruitFilter);
-  else if(state.activeCentralTab === 'chart') await renderChartTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'chart') await renderChartTab(content);
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
   else if(state.activeCentralTab === 'varieties') await renderVarietiesTab(content, fruitNames);
   else if(state.activeCentralTab === 'doimanage') await renderDoiManageTab(content);
@@ -985,50 +988,77 @@ async function renderTableTab(container, fruitFilter){
   `;
 }
 
-async function renderChartTab(container, fruitFilter){
-  const groupBy = state.centralChartGroupBy;
+/* ดึงข้อมูลฤดูกาลตามตัวกรอง (ดอย/ชนิดพืช/พันธุ์) แล้วรวมยอดตามปีงบประมาณ
+   ใช้ร่วมกันทั้งกราฟที่แสดงในแอปและกราฟที่ฝังในรายงาน PDF เพื่อให้ตัวเลขตรงกันเสมอ */
+async function fetchFilteredSeasonsForChart(filters){
+  const { data: seasonsRaw } = await sb.from('seasons').select('*, doi(name), fruit_types(name), weekly_shipments(quantity)');
+  const seasons = (seasonsRaw||[]).filter(s =>
+    (filters.doiId === 'all' || String(s.doi_id) === String(filters.doiId)) &&
+    (filters.fruit === 'all' || s.fruit_types.name === filters.fruit) &&
+    (filters.variety === 'all' || (s.variety_name || '') === filters.variety)
+  );
+  const byYear = {};
+  seasons.forEach(s => {
+    const key = s.year_label;
+    if(!byYear[key]) byYear[key] = { estimated: 0, actual: 0 };
+    byYear[key].estimated += Number(s.estimated_yield || 0);
+    byYear[key].actual += (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+  });
+  const labels = Object.keys(byYear).sort((a,b) => Number(a) - Number(b));
+  const estimatedData = labels.map(l => byYear[l].estimated);
+  const actualData = labels.map(l => byYear[l].actual);
+  return { labels, estimatedData, actualData, matchedSeasonCount: seasons.length };
+}
+
+async function renderChartTab(container){
+  const filters = state.centralChartFilters;
+  const fruitNames = await getAllFruitNames();
+
+  const doiOptions = `<option value="all">ทุกดอย</option>` +
+    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
+  const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
+    fruitNames.map(n => `<option value="${n}" ${filters.fruit===n?'selected':''}>${n}</option>`).join('');
+
+  let varietyRowsQuery = sb.from('fruit_varieties').select('variety_name').order('variety_name');
+  if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
+  const { data: varietyRows } = await varietyRowsQuery;
+  const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
+
   container.innerHTML = `
     <div class="card">
-      <div class="field" style="max-width:260px;">
-        <label>มุมมอง</label>
-        <select id="chartGroupBySelect">
-          <option value="fruit" ${groupBy==='fruit'?'selected':''}>แยกตามชนิดพืช</option>
-          <option value="doi" ${groupBy==='doi'?'selected':''}>แยกตามดอย</option>
-          <option value="variety" ${groupBy==='variety'?'selected':''}>แยกตามพันธุ์</option>
-          <option value="total" ${groupBy==='total'?'selected':''}>ภาพรวมทุกชนิดพืชรวมกัน</option>
-        </select>
+      <h3>ตัวกรองกราฟภาพรวม</h3>
+      <div class="grid-2">
+        <div class="field"><label>ดอย</label><select id="chartFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>ชนิดพืช</label><select id="chartFilterFruit">${fruitOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label><select id="chartFilterVariety">${varietyOptionsHtml}</select></div>
       </div>
+      <p class="muted">กราฟแสดงยอดรวมของสิ่งที่กรองไว้ แยกตามปีงบประมาณ เพื่อดูแนวโน้มปีต่อปี</p>
+    </div>
+    <div class="card">
       <canvas id="overviewChart" height="110"></canvas>
     </div>
   `;
-  document.getElementById('chartGroupBySelect').onchange = (e) => {
-    state.centralChartGroupBy = e.target.value; renderChartTab(container, fruitFilter);
+
+  document.getElementById('chartFilterDoi').onchange = (e) => {
+    state.centralChartFilters.doiId = e.target.value; renderChartTab(container);
+  };
+  document.getElementById('chartFilterFruit').onchange = (e) => {
+    state.centralChartFilters.fruit = e.target.value;
+    state.centralChartFilters.variety = 'all';
+    renderChartTab(container);
+  };
+  document.getElementById('chartFilterVariety').onchange = (e) => {
+    state.centralChartFilters.variety = e.target.value; renderChartTab(container);
   };
 
-  const { data: seasonsRaw } = await sb.from('seasons').select('*, doi(name), fruit_types(name), weekly_shipments(quantity)');
-  const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
-
-  const grouped = {};
-  seasons.forEach(s => {
-    let key;
-    if(groupBy === 'doi') key = s.doi.name;
-    else if(groupBy === 'variety') key = `${s.fruit_types.name} (${s.variety_name || 'ไม่ระบุพันธุ์'})`;
-    else if(groupBy === 'total') key = 'รวมทุกชนิดพืช';
-    else key = s.fruit_types.name; // 'fruit' (default)
-
-    if(!grouped[key]) grouped[key] = { estimated: 0, actual: 0 };
-    grouped[key].estimated += Number(s.estimated_yield || 0);
-    grouped[key].actual += (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
-  });
-
-  const labels = Object.keys(grouped).sort((a,b) => a.localeCompare(b, 'th'));
-  const estimatedData = labels.map(l => grouped[l].estimated);
-  const actualData = labels.map(l => grouped[l].actual);
+  const { labels, estimatedData, actualData } = await fetchFilteredSeasonsForChart(filters);
 
   new Chart(document.getElementById('overviewChart'), {
     type: 'bar',
     data: {
-      labels,
+      labels: labels.map(y => `ปีงบประมาณ ${y}`),
       datasets: [
         { label: 'ประมาณการ (กก.)', data: estimatedData, backgroundColor: '#D99A2B' },
         { label: 'ส่งจริงสะสม (กก.)', data: actualData, backgroundColor: '#1F4B3F' }
@@ -1343,6 +1373,84 @@ async function renderDataManageTab(container){
   }
 }
 
+/* ---- Tab: ติดตามภัยพิบัติ (ส่วนกลาง) — ดูรายงานทั้งหมด + อัปเดตสถานะ ---- */
+async function renderDisasterTrackTab(container){
+  const filters = state.centralDisasterTrackFilters;
+
+  let query = sb.from('disaster_reports')
+    .select('*, doi(name), fruit_types(name)')
+    .order('created_at', { ascending: false });
+  if(filters.doiId !== 'all') query = query.eq('doi_id', filters.doiId);
+  if(filters.status !== 'all') query = query.eq('status', filters.status);
+  const { data: reports } = await query.limit(200);
+
+  const doiOptions = `<option value="all">ทุกดอย</option>` +
+    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
+
+  const newCount = (reports||[]).filter(r => r.status === 'new').length;
+
+  container.innerHTML = `
+    <div class="card">
+      <div class="rpt-stats" style="margin:0 0 14px 0;">
+        <div class="rpt-stat"><div class="num">${newCount}</div><div class="lbl">รอรับทราบ</div></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>กรองตามดอย</label><select id="dtFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>กรองตามสถานะ</label>
+          <select id="dtFilterStatus">
+            <option value="all" ${filters.status==='all'?'selected':''}>ทุกสถานะ</option>
+            <option value="new" ${filters.status==='new'?'selected':''}>ใหม่ (รอรับทราบ)</option>
+            <option value="acknowledged" ${filters.status==='acknowledged'?'selected':''}>รับทราบแล้ว</option>
+            <option value="resolved" ${filters.status==='resolved'?'selected':''}>แก้ไขแล้ว</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div id="dtMsg"></div>
+      <table>
+        <thead><tr><th>วันที่</th><th>ดอย</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>เสียหาย</th><th>รูป</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody>
+          ${(reports||[]).map(r => `<tr>
+            <td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td>
+            <td>${r.doi.name}</td>
+            <td>${r.disaster_type}</td>
+            <td class="muted">${r.affected_area}${r.fruit_types ? ` (${r.fruit_types.name})` : ''}</td>
+            <td>${r.damage_percent!=null ? r.damage_percent+'%' : '—'}</td>
+            <td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปความเสียหาย" style="width:40px;height:40px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td>
+            <td><span class="badge ${r.status==='new'?'badge-clay':(r.status==='acknowledged'?'badge-gold':'badge-green')}">${r.status==='new'?'ใหม่':(r.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td>
+            <td>
+              ${r.status==='new' ? `<button class="btn-secondary" data-ack="${r.id}">รับทราบ</button>` : ''}
+              ${r.status==='acknowledged' ? `<button class="btn-primary" data-resolve="${r.id}">ปิดเคส (แก้ไขแล้ว)</button>` : ''}
+            </td>
+          </tr>`).join('') || '<tr><td colspan="8" class="muted">ไม่มีรายงานตรงกับตัวกรองนี้</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById('dtFilterDoi').onchange = (e) => {
+    state.centralDisasterTrackFilters.doiId = e.target.value; renderDisasterTrackTab(container);
+  };
+  document.getElementById('dtFilterStatus').onchange = (e) => {
+    state.centralDisasterTrackFilters.status = e.target.value; renderDisasterTrackTab(container);
+  };
+  container.querySelectorAll('button[data-ack]').forEach(btn => {
+    btn.onclick = async () => {
+      const { error } = await sb.from('disaster_reports').update({ status: 'acknowledged' }).eq('id', btn.dataset.ack);
+      if(error){ document.getElementById('dtMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      renderDisasterTrackTab(container);
+    };
+  });
+  container.querySelectorAll('button[data-resolve]').forEach(btn => {
+    btn.onclick = async () => {
+      const { error } = await sb.from('disaster_reports').update({ status: 'resolved' }).eq('id', btn.dataset.resolve);
+      if(error){ document.getElementById('dtMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      renderDisasterTrackTab(container);
+    };
+  });
+}
+
 /* ============================================================
    รายงานสำหรับพิมพ์ / ส่งให้หน่วยงานอื่น (ฝ่ายวิจัย)
    ============================================================ */
@@ -1355,6 +1463,11 @@ async function generateReport(fruitFilter){
     sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false }),
     sb.from('disaster_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false })
   ]);
+
+  const chartFilters = state.centralChartFilters;
+  const chartData = await fetchFilteredSeasonsForChart(chartFilters);
+  const chartFilterDoiName = chartFilters.doiId === 'all' ? 'ทุกดอย' : (state.doiList.find(d => String(d.id) === String(chartFilters.doiId)) || {}).name || 'ทุกดอย';
+  const chartFilterDesc = `${chartFilterDoiName} • ${chartFilters.fruit === 'all' ? 'ทุกชนิดพืช' : chartFilters.fruit} • ${chartFilters.variety === 'all' ? 'ทุกพันธุ์' : chartFilters.variety}`;
 
   const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
   const disasterList = (disasters||[]).filter(d => fruitFilter === 'all' || d.fruit_type_id === null || (d.fruit_types && d.fruit_types.name === fruitFilter));
@@ -1412,6 +1525,33 @@ async function generateReport(fruitFilter){
     </div>
 
     <div class="rpt-section">
+      <h2>กราฟสรุปแนวโน้มผลผลิต</h2>
+      <div class="rpt-meta">ตัวกรองที่ใช้: ${chartFilterDesc}</div>
+      <canvas id="reportChart" width="700" height="300" style="max-width:100%; margin-top:10px;"></canvas>
+      <table style="width:100%; border-collapse:collapse; margin-top:14px;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">ปีงบประมาณ</th>
+          <th style="text-align:right; padding:5px;">ประมาณการ (กก.)</th>
+          <th style="text-align:right; padding:5px;">ส่งจริงสะสม (กก.)</th>
+          <th style="text-align:right; padding:5px;">% เทียบกับประมาณการ</th>
+        </tr></thead>
+        <tbody>
+          ${chartData.labels.map((y, i) => {
+            const est = chartData.estimatedData[i];
+            const act = chartData.actualData[i];
+            const pct = est > 0 ? ((act / est) * 100).toFixed(1) + '%' : '—';
+            return `<tr>
+              <td>ปีงบประมาณ ${y}</td>
+              <td style="text-align:right;">${est.toLocaleString()}</td>
+              <td style="text-align:right;">${act.toLocaleString()}</td>
+              <td style="text-align:right;">${pct}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="4" style="padding:8px;">ไม่มีข้อมูลตรงกับตัวกรองนี้</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rpt-section">
       <h2>สถานะรายดอย (เฉพาะฤดูกาลที่กำลังดำเนินการ)</h2>
       <table style="width:100%; border-collapse:collapse;">
         <thead><tr style="border-bottom:1px solid #999;">
@@ -1443,6 +1583,29 @@ async function generateReport(fruitFilter){
   `;
 
   if(btn){ btn.disabled = false; btn.textContent = 'สร้างรายงาน (พิมพ์ / PDF)'; }
+
+  const reportChartCanvas = document.getElementById('reportChart');
+  if(reportChartCanvas && chartData.labels.length > 0){
+    new Chart(reportChartCanvas, {
+      type: 'bar',
+      data: {
+        labels: chartData.labels.map(y => `ปีงบประมาณ ${y}`),
+        datasets: [
+          { label: 'ประมาณการ (กก.)', data: chartData.estimatedData, backgroundColor: '#D99A2B' },
+          { label: 'ส่งจริงสะสม (กก.)', data: chartData.actualData, backgroundColor: '#1F4B3F' }
+        ]
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { beginAtZero: true } }
+      }
+    });
+  }
+
+  // เว้นเวลาสั้นๆ ให้กราฟวาดเสร็จก่อนเปิดหน้าต่างพิมพ์
+  await new Promise(resolve => setTimeout(resolve, 150));
   window.print();
 }
 
