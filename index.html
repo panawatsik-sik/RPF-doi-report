@@ -217,8 +217,8 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -674,12 +674,29 @@ async function renderGrowthTab(container, doiId){
   const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
   const stageOptions = GROWTH_STAGES.map(s => `<option value="${s}">${s}</option>`).join('');
 
+  // ดึงพันธุ์ทั้งหมดที่เกี่ยวข้องกับชนิดผลไม้ของดอยนี้ มาไว้ให้เลือก
+  const fruitNamesInDoi = fruits.map(f => f.name);
+  let varietiesByFruit = {};
+  if(fruitNamesInDoi.length > 0){
+    const { data: varietyRows } = await sb.from('fruit_varieties').select('fruit_name, variety_name').in('fruit_name', fruitNamesInDoi);
+    (varietyRows||[]).forEach(v => {
+      if(!varietiesByFruit[v.fruit_name]) varietiesByFruit[v.fruit_name] = [];
+      varietiesByFruit[v.fruit_name].push(v.variety_name);
+    });
+  }
+  function varietyOptionsFor(fruitId){
+    const fruit = fruits.find(f => String(f.id) === String(fruitId));
+    const list = (fruit && varietiesByFruit[fruit.name]) || [];
+    return `<option value="">— ไม่ระบุพันธุ์ —</option>` + list.map(v => `<option value="${v}">${v}</option>`).join('');
+  }
+
   container.innerHTML = `
     <div class="card">
       <h3>รายงานสถานะการเจริญเติบโต</h3>
       <div id="growthMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="growthFruit">${fruitOptions}</select></div>
+        <div class="field"><label>พันธุ์ (ถ้ามี)</label><select id="growthVariety">${varietyOptionsFor(fruits[0] ? fruits[0].id : null)}</select></div>
         <div class="field"><label>สถานะ</label><select id="growthStatus">${stageOptions}</select></div>
       </div>
       <div class="field"><label>หมายเหตุเพิ่มเติม (ถ้ามี)</label><textarea id="growthNote" rows="2" placeholder="เช่น ติดดอก 30% เจอน้ำค้างแข็งบางส่วน"></textarea></div>
@@ -691,15 +708,20 @@ async function renderGrowthTab(container, doiId){
       <table>
         <thead><tr><th>วันที่</th><th>ชนิดผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th>รูป</th></tr></thead>
         <tbody>
-          ${(reports||[]).map(r => `<tr><td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td><td>${r.fruit_types.name}</td><td><span class="badge badge-green">${r.status}</span></td><td class="muted">${r.note||''}</td><td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปสถานะการเจริญเติบโต" style="width:44px;height:44px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีรายงาน</td></tr>'}
+          ${(reports||[]).map(r => `<tr><td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td><td>${r.fruit_types.name}${r.variety_name ? ` (${r.variety_name})` : ''}</td><td><span class="badge badge-green">${r.status}</span></td><td class="muted">${r.note||''}</td><td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปสถานะการเจริญเติบโต" style="width:44px;height:44px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีรายงาน</td></tr>'}
         </tbody>
       </table>
     </div>
   `;
 
+  document.getElementById('growthFruit').onchange = (e) => {
+    document.getElementById('growthVariety').innerHTML = varietyOptionsFor(e.target.value);
+  };
+
   document.getElementById('saveGrowthBtn').onclick = async () => {
     const btn = document.getElementById('saveGrowthBtn');
     const fruit_type_id = document.getElementById('growthFruit').value;
+    const variety_name = document.getElementById('growthVariety').value || null;
     const status = document.getElementById('growthStatus').value;
     const note = document.getElementById('growthNote').value.trim();
     const fileInput = document.getElementById('growthPhoto');
@@ -721,7 +743,7 @@ async function renderGrowthTab(container, doiId){
     }
 
     const { error } = await sb.from('growth_reports').insert({
-      doi_id: doiId, fruit_type_id, status, note, photo_url, reported_by: state.profile.id
+      doi_id: doiId, fruit_type_id, variety_name, status, note, photo_url, reported_by: state.profile.id
     });
     btn.disabled = false; btn.textContent = 'บันทึกรายงาน';
     if(error){ document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
