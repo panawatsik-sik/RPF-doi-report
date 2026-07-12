@@ -383,6 +383,14 @@ function nameToAuthEmail(input){
   return 'u' + hashNameToHex(normalizeNameForLogin(trimmed)) + NAME_LOGIN_DOMAIN;
 }
 
+/* Storage key ของ Supabase ต้องเป็น ASCII เท่านั้น — ชื่อไฟล์ภาษาไทยหรืออักขระพิเศษทำให้อัปโหลดพังด้วย
+   error "Invalid key" จึงต้องตัดเหลือแค่นามสกุลไฟล์ แล้วตั้งชื่อใหม่ให้ไม่ซ้ำด้วยตัวเลขเวลา */
+function safeStorageFileName(originalName){
+  const extMatch = /\.[a-zA-Z0-9]{1,5}$/.exec(originalName || '');
+  const ext = extMatch ? extMatch[0].toLowerCase() : '';
+  return `${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
+}
+
 function renderLoginForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
@@ -889,7 +897,7 @@ async function renderGrowthTab(container, doiId){
     let photo_url = null;
     if(fileInput.files && fileInput.files[0]){
       const file = fileInput.files[0];
-      const path = `${doiId}/${Date.now()}_${file.name}`;
+      const path = `${doiId}/${safeStorageFileName(file.name)}`;
       const { error: upErr } = await sb.storage.from('growth-photos').upload(path, file);
       if(upErr){
         document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
@@ -964,7 +972,7 @@ async function renderDisasterTab(container, doiId){
     let photo_url = null;
     if(fileInput.files && fileInput.files[0]){
       const file = fileInput.files[0];
-      const path = `${doiId}/${Date.now()}_${file.name}`;
+      const path = `${doiId}/${safeStorageFileName(file.name)}`;
       const { error: upErr } = await sb.storage.from('disaster-photos').upload(path, file);
       if(upErr){
         document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
