@@ -245,6 +245,8 @@ let state = {
   profile: null,
   doiList: [],
   activeStationTab: 'dashboard',
+  stationWeeklyFilters: { fruit: 'all', variety: 'all' },
+  stationDashboardFilters: { fruit: 'all', variety: 'all' },
   activeCentralTab: 'map',
   centralFruitFilter: 'all',
   centralVarietyFruit: null,
@@ -252,6 +254,7 @@ let state = {
   centralChartFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
   centralTableFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
   centralDisasterTrackFilters: { doiId: 'all', status: 'all' },
+  centralUserManageFilter: 'all',
 };
 
 const appEl = document.getElementById('app');
@@ -356,22 +359,36 @@ function renderAuth(){
   authMode === 'login' ? renderLoginForm() : renderSignupForm();
 }
 
+/* แปลง username เป็นอีเมลปลอมสำหรับ Supabase Auth (ต้องมี @ เสมอ)
+   ถ้าผู้ใช้พิมพ์อีเมลจริงมา (มี @ อยู่แล้ว เช่น บัญชีเก่า) จะใช้ตามที่พิมพ์ ไม่แปลง */
+const USERNAME_DOMAIN = '@doi-app.local';
+function usernameToAuthEmail(input){
+  const trimmed = input.trim();
+  if(trimmed.includes('@')) return trimmed.toLowerCase();
+  return trimmed.toLowerCase() + USERNAME_DOMAIN;
+}
+function isValidUsername(u){
+  return /^[a-zA-Z0-9_]{3,20}$/.test(u);
+}
+
 function renderLoginForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
     <div id="authMsg"></div>
-    <div class="field"><label>อีเมล</label><input type="email" id="loginEmail" placeholder="you@example.com"></div>
+    <div class="field"><label>ชื่อผู้ใช้</label><input type="text" id="loginUsername" placeholder="เช่น somchai1" autocapitalize="none"></div>
     <div class="field"><label>รหัสผ่าน</label><input type="password" id="loginPassword"></div>
     <button class="btn-primary" style="width:100%;" id="loginBtn">เข้าสู่ระบบ</button>
   `;
   document.getElementById('loginBtn').onclick = async () => {
-    const email = document.getElementById('loginEmail').value.trim();
+    const usernameInput = document.getElementById('loginUsername').value.trim();
     const password = document.getElementById('loginPassword').value;
     const btn = document.getElementById('loginBtn');
+    if(!usernameInput){ showAuthMsg('กรุณาใส่ชื่อผู้ใช้', true); return; }
     btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ...';
+    const email = usernameToAuthEmail(usernameInput);
     const { error } = await sb.auth.signInWithPassword({ email, password });
     btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
-    if(error){ showAuthMsg(error.message, true); }
+    if(error){ showAuthMsg('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', true); }
   };
 }
 
@@ -381,7 +398,11 @@ function renderSignupForm(){
   area.innerHTML = `
     <div id="authMsg"></div>
     <div class="field"><label>ชื่อ-นามสกุล</label><input type="text" id="suName"></div>
-    <div class="field"><label>อีเมล</label><input type="email" id="suEmail"></div>
+    <div class="field">
+      <label>ชื่อผู้ใช้ (สำหรับ login)</label>
+      <input type="text" id="suUsername" placeholder="เช่น somchai1" autocapitalize="none">
+      <p class="muted" style="margin-top:4px;">ใช้ตัวอักษรภาษาอังกฤษ ตัวเลข หรือขีดล่าง (_) เท่านั้น ยาว 3-20 ตัว ไม่มีเว้นวรรค — ตั้งเป็นชื่อที่จำง่าย จำเป็นต้องใช้ตอน login ทุกครั้ง</p>
+    </div>
     <div class="field"><label>รหัสผ่าน (อย่างน้อย 6 ตัวอักษร)</label><input type="password" id="suPassword"></div>
     <div class="field">
       <label>บทบาท</label>
@@ -402,13 +423,16 @@ function renderSignupForm(){
   };
   document.getElementById('signupBtn').onclick = async () => {
     const full_name = document.getElementById('suName').value.trim();
-    const email = document.getElementById('suEmail').value.trim();
+    const usernameRaw = document.getElementById('suUsername').value.trim().toLowerCase();
     const password = document.getElementById('suPassword').value;
     const role = document.getElementById('suRole').value;
     const doi_id = role === 'station' ? (document.getElementById('suDoi').value || null) : null;
 
-    if(!full_name || !email || password.length < 6){
+    if(!full_name || !usernameRaw || password.length < 6){
       showAuthMsg('กรุณากรอกข้อมูลให้ครบ (รหัสผ่านอย่างน้อย 6 ตัวอักษร)', true); return;
+    }
+    if(!isValidUsername(usernameRaw)){
+      showAuthMsg('ชื่อผู้ใช้ต้องเป็นตัวอักษรภาษาอังกฤษ ตัวเลข หรือขีดล่าง (_) ความยาว 3-20 ตัว', true); return;
     }
     if(role === 'station' && !doi_id){
       showAuthMsg('กรุณาเลือกดอย', true); return;
@@ -416,18 +440,29 @@ function renderSignupForm(){
     const btn = document.getElementById('signupBtn');
     btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
 
-    const { data, error } = await sb.auth.signUp({ email, password });
-    if(error){ showAuthMsg(error.message, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return; }
+    const authEmail = usernameToAuthEmail(usernameRaw);
+    const { data, error } = await sb.auth.signUp({ email: authEmail, password });
+    if(error){
+      const msg = /already registered|already exists/i.test(error.message)
+        ? 'ชื่อผู้ใช้นี้มีคนใช้แล้ว กรุณาตั้งชื่ออื่น'
+        : error.message;
+      showAuthMsg(msg, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return;
+    }
 
     const userId = data.user ? data.user.id : (data.session ? data.session.user.id : null);
     if(userId){
       const { error: profErr } = await sb.from('profiles').insert({
-        id: userId, full_name, email, role, doi_id, status: 'pending'
+        id: userId, full_name, email: authEmail, username: usernameRaw, role, doi_id, status: 'pending'
       });
-      if(profErr){ showAuthMsg(profErr.message, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return; }
+      if(profErr){
+        const msg = /duplicate key|unique/i.test(profErr.message)
+          ? 'ชื่อผู้ใช้นี้มีคนใช้แล้ว กรุณาตั้งชื่ออื่น'
+          : profErr.message;
+        showAuthMsg(msg, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return;
+      }
     }
     btn.disabled = false; btn.textContent = 'สมัครสมาชิก';
-    showAuthMsg('สมัครสมาชิกสำเร็จ กรุณารอการอนุมัติจากทีมส่วนกลาง (หากระบบเปิดให้ยืนยันอีเมล กรุณาตรวจสอบกล่องอีเมลด้วย)', false);
+    showAuthMsg('สมัครสมาชิกสำเร็จ กรุณารอการอนุมัติจากทีมส่วนกลาง — จำชื่อผู้ใช้และรหัสผ่านไว้ให้ดี ใช้ login ครั้งต่อไป', false);
   };
 }
 
@@ -675,27 +710,53 @@ async function renderEstimateTab(container, doiId){
 
 /* ---- Tab: ยอดส่งรายสัปดาห์ — ทำทุกวันอังคาร ออกแบบให้กรอกเร็วที่สุด ---- */
 async function renderWeeklyTab(container, doiId){
-  const { data: openSeasons } = await sb.from('seasons')
+  const filters = state.stationWeeklyFilters;
+  const fruits = await getFruitTypes(doiId);
+
+  const { data: openSeasonsRaw } = await sb.from('seasons')
     .select('id, year_label, variety_name, fruit_types(name)')
     .eq('doi_id', doiId).eq('status', 'open').order('created_at', { ascending: false });
 
-  const seasonOptions = (openSeasons||[]).map(s =>
+  const openSeasons = (openSeasonsRaw||[]).filter(s =>
+    (filters.fruit === 'all' || s.fruit_types.name === filters.fruit) &&
+    (filters.variety === 'all' || (s.variety_name || '') === filters.variety)
+  );
+
+  const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
+    fruits.map(f => `<option value="${f.name}" ${filters.fruit===f.name?'selected':''}>${f.name}</option>`).join('');
+
+  let varietyRowsQuery = sb.from('fruit_varieties').select('variety_name').order('variety_name');
+  if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
+  const { data: varietyRows } = await varietyRowsQuery;
+  const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
+
+  const seasonOptions = openSeasons.map(s =>
     `<option value="${s.id}">${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''} — ปีงบประมาณ ${s.year_label}</option>`
   ).join('');
 
+  const openSeasonIds = openSeasons.map(s => s.id);
   const { data: recentShipments } = await sb.from('weekly_shipments')
     .select('id, week_start_date, quantity, note, created_at, seasons(fruit_types(name), variety_name, year_label)')
-    .in('season_id', (openSeasons||[]).map(s => s.id).length ? (openSeasons||[]).map(s => s.id) : [0])
+    .in('season_id', openSeasonIds.length ? openSeasonIds : [0])
     .order('week_start_date', { ascending: false })
     .limit(20);
 
   container.innerHTML = `
     <div class="card">
+      <h3>ตัวกรอง</h3>
+      <div class="grid-2">
+        <div class="field"><label>ชนิดพืช</label><select id="wkFilterFruit">${fruitOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label><select id="wkFilterVariety">${varietyOptionsHtml}</select></div>
+      </div>
+    </div>
+    <div class="card">
       <h3>บันทึกยอดส่งรายสัปดาห์</h3>
       <p class="muted">กรอกทุกวันอังคาร — เลือกฤดูกาลที่กำลังดำเนินการ แล้วใส่ปริมาณที่ส่งในสัปดาห์นี้</p>
       <div id="weeklyMsg"></div>
-      ${!openSeasons || openSeasons.length === 0 ? `
-        <div class="empty">ยังไม่มีฤดูกาลที่เปิดอยู่ — ไปที่แท็บ "ประมาณการผลผลิต" เพื่อเปิดฤดูกาลก่อน</div>
+      ${openSeasons.length === 0 ? `
+        <div class="empty">ไม่มีฤดูกาลที่เปิดอยู่ตรงกับตัวกรองนี้</div>
       ` : `
         <div class="field"><label>ฤดูกาล (ชนิดผลไม้ / พันธุ์)</label><select id="wkSeasonSelect">${seasonOptions}</select></div>
         <div class="grid-2">
@@ -707,7 +768,7 @@ async function renderWeeklyTab(container, doiId){
       `}
     </div>
     <div class="card">
-      <h3>ยอดส่งล่าสุด</h3>
+      <h3>ยอดส่งล่าสุด${filters.fruit!=='all' ? ` — ${filters.fruit}` : ''}${filters.variety!=='all' ? ` (${filters.variety})` : ''}</h3>
       <table>
         <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ผลไม้</th><th>ปริมาณ</th><th>หมายเหตุ</th></tr></thead>
         <tbody>
@@ -716,11 +777,21 @@ async function renderWeeklyTab(container, doiId){
             <td>${w.seasons ? `${w.seasons.fruit_types.name}${w.seasons.variety_name ? ` (${w.seasons.variety_name})` : ''} — ${w.seasons.year_label}` : '—'}</td>
             <td>${Number(w.quantity).toLocaleString()} กก.</td>
             <td class="muted">${w.note||''}</td>
-          </tr>`).join('') || '<tr><td colspan="4" class="muted">ยังไม่มียอดส่งรายสัปดาห์</td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="4" class="muted">ยังไม่มียอดส่งรายสัปดาห์ตรงกับตัวกรองนี้</td></tr>'}
         </tbody>
       </table>
     </div>
   `;
+
+  document.getElementById('wkFilterFruit').onchange = (e) => {
+    state.stationWeeklyFilters.fruit = e.target.value;
+    state.stationWeeklyFilters.variety = 'all';
+    renderWeeklyTab(container, doiId);
+  };
+  document.getElementById('wkFilterVariety').onchange = (e) => {
+    state.stationWeeklyFilters.variety = e.target.value;
+    renderWeeklyTab(container, doiId);
+  };
 
   const saveBtn = document.getElementById('saveWeeklyBtn');
   if(saveBtn){
@@ -934,34 +1005,65 @@ async function renderFruitTab(container, doiId){
 async function renderStationDashboardTab(container, doiId){
   container.innerHTML = `<div class="card"><div class="empty">กำลังโหลด...</div></div>`;
 
-  const [{ data: growth }, { data: seasonsRaw }, { data: disasters }] = await Promise.all([
+  const filters = state.stationDashboardFilters;
+  const fruits = await getFruitTypes(doiId);
+
+  const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
+    fruits.map(f => `<option value="${f.name}" ${filters.fruit===f.name?'selected':''}>${f.name}</option>`).join('');
+
+  let varietyRowsQuery = sb.from('fruit_varieties').select('variety_name').order('variety_name');
+  if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
+  const { data: varietyRows } = await varietyRowsQuery;
+  const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
+
+  const [{ data: growthRaw }, { data: seasonsRawAll }, { data: disastersRaw }] = await Promise.all([
     sb.from('growth_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }),
     sb.from('seasons').select('*, fruit_types(name), weekly_shipments(quantity, week_start_date)').eq('doi_id', doiId).eq('status', 'open'),
-    sb.from('disaster_reports').select('*').eq('doi_id', doiId).order('created_at', { ascending: false }).limit(5)
+    sb.from('disaster_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false })
   ]);
 
+  const matchesFilter = (fruitName, varietyName) =>
+    (filters.fruit === 'all' || fruitName === filters.fruit) &&
+    (filters.variety === 'all' || (varietyName || '') === filters.variety);
+  const matchesFruitOnly = (fruitName) => filters.fruit === 'all' || fruitName === filters.fruit;
+
+  const growth = (growthRaw||[]).filter(g => matchesFilter(g.fruit_types.name, g.variety_name));
+  const seasonsRaw = (seasonsRawAll||[]).filter(s => matchesFilter(s.fruit_types.name, s.variety_name));
+  // รายงานภัยพิบัติไม่มีข้อมูลพันธุ์ให้กรอง จึงกรองแค่ตามชนิดพืช — ที่ไม่ระบุชนิด (กระทบทั้งดอย) จะแสดงเสมอ
+  const disasters = (disastersRaw||[]).filter(d => !d.fruit_type_id || matchesFruitOnly(d.fruit_types ? d.fruit_types.name : null)).slice(0, 5);
+
   const latestGrowthByFruit = {};
-  (growth||[]).forEach(g => {
+  growth.forEach(g => {
     if(!latestGrowthByFruit[g.fruit_type_id]) latestGrowthByFruit[g.fruit_type_id] = g;
   });
   const growthList = Object.values(latestGrowthByFruit);
 
-  const newDisasterCount = (disasters||[]).filter(d => d.status === 'new').length;
+  const newDisasterCount = disasters.filter(d => d.status === 'new').length;
   const now = new Date();
-  const weekTotal = (seasonsRaw||[]).reduce((sum, s) => {
+  const weekTotal = seasonsRaw.reduce((sum, s) => {
     return sum + (s.weekly_shipments||[]).filter(w => {
       const d = new Date(w.week_start_date);
       const diffDays = (now - d) / (1000*60*60*24);
       return diffDays >= 0 && diffDays <= 7;
     }).reduce((wsum,w)=>wsum+Number(w.quantity),0);
   }, 0);
-  const totalEstimate = (seasonsRaw||[]).reduce((sum,s)=>sum+Number(s.estimated_yield||0), 0);
-  const totalShipped = (seasonsRaw||[]).reduce((sum,s)=>sum+(s.weekly_shipments||[]).reduce((wsum,w)=>wsum+Number(w.quantity),0), 0);
+  const totalEstimate = seasonsRaw.reduce((sum,s)=>sum+Number(s.estimated_yield||0), 0);
+  const totalShipped = seasonsRaw.reduce((sum,s)=>sum+(s.weekly_shipments||[]).reduce((wsum,w)=>wsum+Number(w.quantity),0), 0);
 
   container.innerHTML = `
     <div class="card">
+      <h3>ตัวกรอง</h3>
+      <div class="grid-2">
+        <div class="field"><label>ชนิดพืช</label><select id="dashFilterFruit">${fruitOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label><select id="dashFilterVariety">${varietyOptionsHtml}</select></div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="rpt-stats" style="margin:0;">
-        <div class="rpt-stat"><div class="num">${seasonsRaw ? seasonsRaw.length : 0}</div><div class="lbl">ฤดูกาลที่กำลังดำเนินการ</div></div>
+        <div class="rpt-stat"><div class="num">${seasonsRaw.length}</div><div class="lbl">ฤดูกาลที่กำลังดำเนินการ</div></div>
         <div class="rpt-stat"><div class="num">${totalEstimate.toLocaleString()}</div><div class="lbl">ประมาณการรวม (กก.)</div></div>
         <div class="rpt-stat"><div class="num">${totalShipped.toLocaleString()}</div><div class="lbl">ส่งแล้วรวม (กก.)</div></div>
         <div class="rpt-stat"><div class="num">${weekTotal.toLocaleString()}</div><div class="lbl">ส่ง 7 วันล่าสุด (กก.)</div></div>
@@ -974,7 +1076,7 @@ async function renderStationDashboardTab(container, doiId){
       <table>
         <thead><tr><th>ชนิดผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th></tr></thead>
         <tbody>
-          ${growthList.map(g => `<tr><td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td><td><span class="badge badge-green">${g.status}</span></td><td class="muted">${g.note||''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">ยังไม่มีรายงาน</td></tr>'}
+          ${growthList.map(g => `<tr><td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td><td><span class="badge badge-green">${g.status}</span></td><td class="muted">${g.note||''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">ไม่มีข้อมูลตรงกับตัวกรองนี้</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -989,13 +1091,23 @@ async function renderStationDashboardTab(container, doiId){
       <table>
         <thead><tr><th>วันที่</th><th>ประเภท</th><th>พื้นที่</th><th>สถานะ</th></tr></thead>
         <tbody>
-          ${(disasters||[]).map(d => `<tr><td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td><td>${d.disaster_type}</td><td class="muted">${d.affected_area}</td><td><span class="badge ${d.status==='new'?'badge-clay':(d.status==='acknowledged'?'badge-gold':'badge-green')}">${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td></tr>`).join('') || '<tr><td colspan="4" class="muted">ไม่มีรายงานภัยพิบัติ</td></tr>'}
+          ${disasters.map(d => `<tr><td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td><td>${d.disaster_type}</td><td class="muted">${d.affected_area}</td><td><span class="badge ${d.status==='new'?'badge-clay':(d.status==='acknowledged'?'badge-gold':'badge-green')}">${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td></tr>`).join('') || '<tr><td colspan="4" class="muted">ไม่มีรายงานภัยพิบัติ</td></tr>'}
         </tbody>
       </table>
     </div>
   `;
 
-  const chartData = await fetchFilteredSeasonsForChart({ doiId: String(doiId), fruit: 'all', variety: 'all' });
+  document.getElementById('dashFilterFruit').onchange = (e) => {
+    state.stationDashboardFilters.fruit = e.target.value;
+    state.stationDashboardFilters.variety = 'all';
+    renderStationDashboardTab(container, doiId);
+  };
+  document.getElementById('dashFilterVariety').onchange = (e) => {
+    state.stationDashboardFilters.variety = e.target.value;
+    renderStationDashboardTab(container, doiId);
+  };
+
+  const chartData = await fetchFilteredSeasonsForChart({ doiId: String(doiId), fruit: filters.fruit, variety: filters.variety });
   new Chart(document.getElementById('stationChart'), {
     type: 'bar',
     data: {
@@ -1163,6 +1275,7 @@ async function renderCentral(){
       <button class="tab ${tabActive('table')}" data-tab="table">ตารางรายดอย</button>
       <button class="tab ${tabActive('chart')}" data-tab="chart">กราฟภาพรวม</button>
       <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
+      <button class="tab ${tabActive('usermanage')}" data-tab="usermanage">จัดการผู้ใช้งาน</button>
       <button class="tab ${tabActive('varieties')}" data-tab="varieties">จัดการพันธุ์</button>
       <button class="tab ${tabActive('doimanage')}" data-tab="doimanage">จัดการดอย</button>
       <button class="tab ${tabActive('datamanage')}" data-tab="datamanage">ลบข้อมูล</button>
@@ -1187,6 +1300,7 @@ async function renderCentral(){
   else if(state.activeCentralTab === 'table') await renderTableTab(content);
   else if(state.activeCentralTab === 'chart') await renderChartTab(content);
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
+  else if(state.activeCentralTab === 'usermanage') await renderUserManageTab(content);
   else if(state.activeCentralTab === 'varieties') await renderVarietiesTab(content, fruitNames);
   else if(state.activeCentralTab === 'doimanage') await renderDoiManageTab(content);
   else if(state.activeCentralTab === 'datamanage') await renderDataManageTab(content);
@@ -1504,6 +1618,95 @@ async function renderMembersTab(container){
     btn.onclick = async () => {
       await sb.from('profiles').update({ status: 'rejected' }).eq('id', btn.dataset.reject);
       renderMembersTab(container);
+    };
+  });
+}
+
+/* ---- Tab: จัดการผู้ใช้งาน (ส่วนกลาง) — ดูผู้ใช้ทั้งหมด, เปลี่ยนบทบาท/ดอย, เพิกถอนสิทธิ์ ---- */
+async function renderUserManageTab(container){
+  const filter = state.centralUserManageFilter;
+  let query = sb.from('profiles').select('*, doi(name)').order('created_at', { ascending: false });
+  if(filter !== 'all') query = query.eq('status', filter);
+  const { data: users } = await query;
+
+  const doiOptionsFor = (currentDoiId) => state.doiList.map(d =>
+    `<option value="${d.id}" ${String(currentDoiId)===String(d.id)?'selected':''}>${d.name}</option>`
+  ).join('');
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>ผู้ใช้งานทั้งหมด</h3>
+      <p class="muted">เปลี่ยนบทบาท ดอย หรือสถานะได้โดยตรงในตาราง — ตั้งสถานะเป็น "ปฏิเสธ" เพื่อเพิกถอนสิทธิ์การเข้าใช้งาน (ปิดกั้นการ login ทันที)</p>
+      <div id="userManageMsg"></div>
+      <div class="field" style="max-width:220px;">
+        <label>กรองตามสถานะ</label>
+        <select id="umFilterStatus">
+          <option value="all" ${filter==='all'?'selected':''}>ทั้งหมด</option>
+          <option value="approved" ${filter==='approved'?'selected':''}>ใช้งานได้ (approved)</option>
+          <option value="pending" ${filter==='pending'?'selected':''}>รออนุมัติ (pending)</option>
+          <option value="rejected" ${filter==='rejected'?'selected':''}>ถูกเพิกถอนสิทธิ์ (rejected)</option>
+        </select>
+      </div>
+      <table style="margin-top:12px;">
+        <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้ / อีเมล</th><th>บทบาท</th><th>ดอย</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody>
+          ${(users||[]).map(u => `<tr>
+            <td>${u.full_name}</td>
+            <td class="muted">${u.username || u.email}</td>
+            <td>
+              <select data-role-for="${u.id}">
+                <option value="station" ${u.role==='station'?'selected':''}>เจ้าหน้าที่ดอย</option>
+                <option value="central" ${u.role==='central'?'selected':''}>ส่วนกลาง</option>
+              </select>
+            </td>
+            <td>
+              <select data-doi-for="${u.id}" ${u.role==='central'?'disabled':''}>
+                ${doiOptionsFor(u.doi_id)}
+              </select>
+            </td>
+            <td>
+              <select data-status-for="${u.id}">
+                <option value="approved" ${u.status==='approved'?'selected':''}>ใช้งานได้</option>
+                <option value="pending" ${u.status==='pending'?'selected':''}>รออนุมัติ</option>
+                <option value="rejected" ${u.status==='rejected'?'selected':''}>เพิกถอนสิทธิ์</option>
+              </select>
+            </td>
+            <td><button class="btn-secondary" data-save-user="${u.id}">บันทึก</button></td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">ไม่มีผู้ใช้งานตรงกับตัวกรองนี้</td></tr>'}
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:10px;">หมายเหตุ: การ "เพิกถอนสิทธิ์" จะบล็อกการเข้าใช้งานทันทีในแอปนี้ แต่ไม่ได้ลบบัญชี login ออกจากระบบทั้งหมด — ถ้าต้องการลบบัญชีถาวรจริงๆ ต้องทำผ่าน Supabase Dashboard → Authentication → Users โดยตรง</p>
+    </div>
+  `;
+
+  document.getElementById('umFilterStatus').onchange = (e) => {
+    state.centralUserManageFilter = e.target.value; renderUserManageTab(container);
+  };
+
+  container.querySelectorAll('select[data-role-for]').forEach(sel => {
+    sel.onchange = () => {
+      const doiSelect = container.querySelector(`select[data-doi-for="${sel.dataset.roleFor}"]`);
+      doiSelect.disabled = sel.value === 'central';
+    };
+  });
+
+  container.querySelectorAll('button[data-save-user]').forEach(btn => {
+    btn.onclick = async () => {
+      const userId = btn.dataset.saveUser;
+      const role = container.querySelector(`select[data-role-for="${userId}"]`).value;
+      const doi_id = role === 'central' ? null : container.querySelector(`select[data-doi-for="${userId}"]`).value;
+      const status = container.querySelector(`select[data-status-for="${userId}"]`).value;
+
+      if(role === 'station' && !doi_id){
+        document.getElementById('userManageMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกดอยสำหรับเจ้าหน้าที่ดอย</div>`;
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+      const { error } = await sb.from('profiles').update({ role, doi_id, status }).eq('id', userId);
+      btn.disabled = false; btn.textContent = 'บันทึก';
+      if(error){ document.getElementById('userManageMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      document.getElementById('userManageMsg').innerHTML = `<div class="msg msg-ok">บันทึกเรียบร้อย</div>`;
+      renderUserManageTab(container);
     };
   });
 }
