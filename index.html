@@ -391,6 +391,34 @@ function safeStorageFileName(originalName){
   return `${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
 }
 
+/* อัปโหลดไฟล์หลายไฟล์ขึ้น bucket ที่กำหนด คืนค่าเป็น array ของ public URL
+   ถ้าไฟล์ไหนอัปโหลดพลาด จะโยน error พร้อมชื่อไฟล์นั้นออกไปทันที (หยุดที่ไฟล์แรกที่พัง) */
+async function uploadMultiplePhotos(files, bucket, folder){
+  const urls = [];
+  for(const file of files){
+    const path = `${folder}/${safeStorageFileName(file.name)}`;
+    const { error } = await sb.storage.from(bucket).upload(path, file);
+    if(error) throw new Error(`อัปโหลด "${file.name}" ไม่สำเร็จ: ${error.message}`);
+    const { data: pub } = sb.storage.from(bucket).getPublicUrl(path);
+    urls.push(pub.publicUrl);
+  }
+  return urls;
+}
+
+/* รวมรูปจากคอลัมน์เก่า (photo_url เดี่ยว) กับคอลัมน์ใหม่ (photo_urls หลายรูป) เข้าด้วยกัน
+   เผื่อรายงานเก่าก่อนอัปเดตฟีเจอร์นี้ที่มีแค่รูปเดียว */
+function allPhotoUrls(report){
+  const urls = Array.isArray(report.photo_urls) ? report.photo_urls.filter(Boolean) : [];
+  if(report.photo_url && !urls.includes(report.photo_url)) urls.unshift(report.photo_url);
+  return urls;
+}
+
+function renderPhotoThumbs(report, altText){
+  const urls = allPhotoUrls(report);
+  if(urls.length === 0) return '—';
+  return urls.map(u => `<a href="${u}" target="_blank"><img src="${u}" alt="${altText}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:4px;"></a>`).join('');
+}
+
 function renderLoginForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
@@ -865,7 +893,7 @@ async function renderGrowthTab(container, doiId){
         <div class="field"><label>สถานะ</label><select id="growthStatus">${stageOptions}</select></div>
       </div>
       <div class="field"><label>หมายเหตุเพิ่มเติม (ถ้ามี)</label><textarea id="growthNote" rows="2" placeholder="เช่น ติดดอก 30% เจอน้ำค้างแข็งบางส่วน"></textarea></div>
-      <div class="field"><label>แนบรูปภาพ (ถ้ามี)</label><input type="file" id="growthPhoto" accept="image/*"></div>
+      <div class="field"><label>แนบรูปภาพ (แนบได้หลายรูป)</label><input type="file" id="growthPhoto" accept="image/*" multiple></div>
       <button class="btn-primary" id="saveGrowthBtn">บันทึกรายงาน</button>
     </div>
     <div class="card">
@@ -873,7 +901,7 @@ async function renderGrowthTab(container, doiId){
       <table>
         <thead><tr><th>วันที่</th><th>ชนิดผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th>รูป</th></tr></thead>
         <tbody>
-          ${(reports||[]).map(r => `<tr><td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td><td>${r.fruit_types.name}${r.variety_name ? ` (${r.variety_name})` : ''}</td><td><span class="badge badge-green">${r.status}</span></td><td class="muted">${r.note||''}</td><td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปสถานะการเจริญเติบโต" style="width:44px;height:44px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีรายงาน</td></tr>'}
+          ${(reports||[]).map(r => `<tr><td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td><td>${r.fruit_types.name}${r.variety_name ? ` (${r.variety_name})` : ''}</td><td><span class="badge badge-green">${r.status}</span></td><td class="muted">${r.note||''}</td><td>${renderPhotoThumbs(r, 'รูปสถานะการเจริญเติบโต')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">ยังไม่มีรายงาน</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -894,21 +922,18 @@ async function renderGrowthTab(container, doiId){
 
     btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
 
-    let photo_url = null;
-    if(fileInput.files && fileInput.files[0]){
-      const file = fileInput.files[0];
-      const path = `${doiId}/${safeStorageFileName(file.name)}`;
-      const { error: upErr } = await sb.storage.from('growth-photos').upload(path, file);
-      if(upErr){
-        document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
+    let photo_urls = [];
+    if(fileInput.files && fileInput.files.length > 0){
+      try{
+        photo_urls = await uploadMultiplePhotos(Array.from(fileInput.files), 'growth-photos', doiId);
+      } catch(uploadErr){
+        document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">${uploadErr.message}</div>`;
         btn.disabled = false; btn.textContent = 'บันทึกรายงาน'; return;
       }
-      const { data: pub } = sb.storage.from('growth-photos').getPublicUrl(path);
-      photo_url = pub.publicUrl;
     }
 
     const { error } = await sb.from('growth_reports').insert({
-      doi_id: doiId, fruit_type_id, variety_name, status, note, photo_url, reported_by: state.profile.id
+      doi_id: doiId, fruit_type_id, variety_name, status, note, photo_urls, reported_by: state.profile.id
     });
     btn.disabled = false; btn.textContent = 'บันทึกรายงาน';
     if(error){ document.getElementById('growthMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
@@ -935,7 +960,7 @@ async function renderDisasterTab(container, doiId){
       </div>
       <div class="field"><label>พื้นที่ที่ได้รับผลกระทบ</label><textarea id="disArea" rows="2" placeholder="เช่น แปลงปลูกฝั่งทิศเหนือของดอย ประมาณ 3 ไร่"></textarea></div>
       <div class="field"><label>ประมาณการความเสียหาย (%)</label><input type="number" min="0" max="100" step="1" id="disPercent"></div>
-      <div class="field"><label>แนบรูปภาพ</label><input type="file" id="disPhoto" accept="image/*"></div>
+      <div class="field"><label>แนบรูปภาพ (แนบได้หลายรูป)</label><input type="file" id="disPhoto" accept="image/*" multiple></div>
       <button class="btn-danger" id="saveDisasterBtn">ส่งรายงานภัยพิบัติ</button>
     </div>
     <div class="card">
@@ -949,7 +974,7 @@ async function renderDisasterTab(container, doiId){
             <td class="muted">${r.affected_area}</td>
             <td>${r.damage_percent!=null ? r.damage_percent+'%' : '—'}</td>
             <td><span class="badge ${r.status==='new'?'badge-clay':'badge-green'}">${r.status==='new'?'ใหม่':(r.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td>
-            <td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank">ดูรูป</a>` : '—'}</td>
+            <td>${renderPhotoThumbs(r, 'รูปความเสียหาย')}</td>
           </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีรายงาน</td></tr>'}
         </tbody>
       </table>
@@ -969,21 +994,18 @@ async function renderDisasterTab(container, doiId){
     }
     btn.disabled = true; btn.textContent = 'กำลังส่ง...';
 
-    let photo_url = null;
-    if(fileInput.files && fileInput.files[0]){
-      const file = fileInput.files[0];
-      const path = `${doiId}/${safeStorageFileName(file.name)}`;
-      const { error: upErr } = await sb.storage.from('disaster-photos').upload(path, file);
-      if(upErr){
-        document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">อัปโหลดรูปไม่สำเร็จ: ${upErr.message}</div>`;
+    let photo_urls = [];
+    if(fileInput.files && fileInput.files.length > 0){
+      try{
+        photo_urls = await uploadMultiplePhotos(Array.from(fileInput.files), 'disaster-photos', doiId);
+      } catch(uploadErr){
+        document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">${uploadErr.message}</div>`;
         btn.disabled = false; btn.textContent = 'ส่งรายงานภัยพิบัติ'; return;
       }
-      const { data: pub } = sb.storage.from('disaster-photos').getPublicUrl(path);
-      photo_url = pub.publicUrl;
     }
 
     const { error } = await sb.from('disaster_reports').insert({
-      doi_id: doiId, fruit_type_id, disaster_type, affected_area, damage_percent, photo_url, reported_by: state.profile.id
+      doi_id: doiId, fruit_type_id, disaster_type, affected_area, damage_percent, photo_urls, reported_by: state.profile.id
     });
     btn.disabled = false; btn.textContent = 'ส่งรายงานภัยพิบัติ';
     if(error){ document.getElementById('disasterMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
@@ -2035,7 +2057,7 @@ async function renderDisasterTrackTab(container){
             <td>${r.disaster_type}</td>
             <td class="muted">${r.affected_area}${r.fruit_types ? ` (${r.fruit_types.name})` : ''}</td>
             <td>${r.damage_percent!=null ? r.damage_percent+'%' : '—'}</td>
-            <td>${r.photo_url ? `<a href="${r.photo_url}" target="_blank"><img src="${r.photo_url}" alt="รูปความเสียหาย" style="width:40px;height:40px;object-fit:cover;border-radius:6px;vertical-align:middle;"></a>` : '—'}</td>
+            <td>${renderPhotoThumbs(r, 'รูปความเสียหาย')}</td>
             <td><span class="badge ${r.status==='new'?'badge-clay':(r.status==='acknowledged'?'badge-gold':'badge-green')}">${r.status==='new'?'ใหม่':(r.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td>
             <td>
               ${r.status==='new' ? `<button class="btn-secondary" data-ack="${r.id}">รับทราบ</button>` : ''}
