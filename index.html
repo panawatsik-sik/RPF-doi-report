@@ -217,8 +217,8 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -250,6 +250,7 @@ let state = {
   centralVarietyFruit: null,
   centralDataManageSection: 'seasons',
   centralChartFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
+  centralTableFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
   centralDisasterTrackFilters: { doiId: 'all', status: 'all' },
 };
 
@@ -292,6 +293,7 @@ async function loadDoiList(){
 function render(){
   if(!state.session){
     topbarEl.style.display = 'none';
+    teardownMapRealtime();
     renderAuth();
     return;
   }
@@ -303,16 +305,19 @@ function render(){
     return;
   }
   if(state.profile.status === 'pending'){
+    teardownMapRealtime();
     renderPending();
     return;
   }
   if(state.profile.status === 'rejected'){
+    teardownMapRealtime();
     renderRejected();
     return;
   }
   if(state.profile.role === 'central'){
     renderCentral();
   } else {
+    teardownMapRealtime();
     renderStation();
   }
 }
@@ -483,6 +488,16 @@ async function getFruitTypes(doiId){
 }
 
 let openEstimateEditors = new Set();
+let mapInstance = null;
+let mapMarkersLayer = null;
+let mapRealtimeChannel = null;
+
+function teardownMapRealtime(){
+  if(mapRealtimeChannel){
+    sb.removeChannel(mapRealtimeChannel);
+    mapRealtimeChannel = null;
+  }
+}
 
 /* ---- Tab: ฤดูกาล / ประมาณการ / ยอดส่งรายสัปดาห์ ---- */
 async function renderSeasonTab(container, doiId){
@@ -903,9 +918,11 @@ async function renderCentral(){
 
   const content = document.getElementById('centralContent');
   const fruitFilter = state.centralFruitFilter;
+  if(state.activeCentralTab !== 'map') teardownMapRealtime();
+
   if(state.activeCentralTab === 'map') await renderMapTab(content, fruitFilter);
   else if(state.activeCentralTab === 'disastertrack') await renderDisasterTrackTab(content);
-  else if(state.activeCentralTab === 'table') await renderTableTab(content, fruitFilter);
+  else if(state.activeCentralTab === 'table') await renderTableTab(content);
   else if(state.activeCentralTab === 'chart') await renderChartTab(content);
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
   else if(state.activeCentralTab === 'varieties') await renderVarietiesTab(content, fruitNames);
@@ -913,40 +930,141 @@ async function renderCentral(){
   else if(state.activeCentralTab === 'datamanage') await renderDataManageTab(content);
 }
 
-async function renderMapTab(container, fruitFilter){
-  container.innerHTML = `<div class="card"><div id="map"></div><p class="muted" style="margin-top:10px;">จุดสีแดง = มีรายงานภัยพิบัติที่ยังไม่ได้รับทราบ${fruitFilter!=='all' ? ` (เฉพาะ${fruitFilter} หรือกระทบทั้งดอย)` : ''} &nbsp;•&nbsp; จุดสีเขียว = ปกติ</p></div>`;
+/* รวบรวมข้อมูลสรุปต่อดอย (ภัยพิบัติล่าสุด, สถานะการเจริญเติบโตล่าสุดต่อชนิดพืช, ยอดส่ง 7 วันล่าสุด)
+   สำหรับแสดงในป๊อปอัพของแผนที่ */
+async function fetchMapSummary(fruitFilter){
+  const [{ data: disasters }, { data: growth }, { data: seasonsRaw }] = await Promise.all([
+    sb.from('disaster_reports').select('doi_id, fruit_type_id, disaster_type, status, created_at, fruit_types(name)').order('created_at', { ascending: false }),
+    sb.from('growth_reports').select('doi_id, fruit_type_id, status, created_at, fruit_types(name)').order('created_at', { ascending: false }),
+    sb.from('seasons').select('doi_id, fruit_types(name), weekly_shipments(quantity, week_start_date)').eq('status','open')
+  ]);
 
-  const { data: disasters } = await sb.from('disaster_reports')
-    .select('doi_id, fruit_type_id, fruit_types(name)').eq('status','new');
-  const relevant = (disasters||[]).filter(d =>
-    fruitFilter === 'all' || d.fruit_type_id === null || (d.fruit_types && d.fruit_types.name === fruitFilter)
-  );
-  const disasterDoiIds = new Set(relevant.map(d=>d.doi_id));
+  const summary = {};
+  function ensure(doiId){
+    if(!summary[doiId]) summary[doiId] = { alert: false, lastDisaster: null, growthList: [], weekTotal: 0 };
+    return summary[doiId];
+  }
 
-  const map = L.map('map').setView([18.7, 99.0], 7);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
-  }).addTo(map);
+  (disasters||[]).forEach(d => {
+    const matchesFilter = fruitFilter === 'all' || d.fruit_type_id === null || (d.fruit_types && d.fruit_types.name === fruitFilter);
+    if(!matchesFilter) return;
+    const s = ensure(d.doi_id);
+    if(d.status === 'new') s.alert = true;
+    if(!s.lastDisaster) s.lastDisaster = d;
+  });
 
+  const seenGrowthKeys = new Set();
+  (growth||[]).forEach(g => {
+    if(fruitFilter !== 'all' && g.fruit_types.name !== fruitFilter) return;
+    const key = `${g.doi_id}-${g.fruit_type_id}`;
+    if(seenGrowthKeys.has(key)) return;
+    seenGrowthKeys.add(key);
+    const s = ensure(g.doi_id);
+    s.growthList.push({ fruit: g.fruit_types.name, status: g.status });
+  });
+
+  (seasonsRaw||[]).forEach(se => {
+    if(fruitFilter !== 'all' && se.fruit_types.name !== fruitFilter) return;
+    const s = ensure(se.doi_id);
+    const now = new Date();
+    (se.weekly_shipments||[]).forEach(w => {
+      const d = new Date(w.week_start_date);
+      const diffDays = (now - d) / (1000*60*60*24);
+      if(diffDays >= 0 && diffDays <= 7) s.weekTotal += Number(w.quantity);
+    });
+  });
+
+  return summary;
+}
+
+function buildDoiPopupHtml(d, s){
+  const parts = [`<strong>${d.name}</strong><br><span style="color:#666;">${d.province||''}</span>`];
+  if(s && s.alert){
+    parts.push(`<br><span style="color:#B84B32;">⚠ มีรายงานภัยพิบัติใหม่ (${s.lastDisaster ? s.lastDisaster.disaster_type : ''})</span>`);
+  } else if(s && s.lastDisaster){
+    parts.push(`<br><span style="color:#888; font-size:12px;">ภัยพิบัติล่าสุด: ${s.lastDisaster.disaster_type} (${s.lastDisaster.status==='resolved'?'แก้ไขแล้ว':'รับทราบแล้ว'})</span>`);
+  }
+  if(s && s.growthList.length > 0){
+    parts.push('<br><div style="margin-top:4px; font-size:12.5px;">' +
+      s.growthList.map(g => `${g.fruit}: <strong>${g.status}</strong>`).join('<br>') +
+      '</div>');
+  }
+  if(s && s.weekTotal > 0){
+    parts.push(`<br><span style="font-size:12.5px;">ส่งแล้วสัปดาห์นี้: <strong>${s.weekTotal.toLocaleString()} กก.</strong></span>`);
+  }
+  if(!s || (s.growthList.length === 0 && s.weekTotal === 0 && !s.lastDisaster)){
+    parts.push('<br><span style="color:#888; font-size:12px;">ยังไม่มีข้อมูลรายงาน</span>');
+  }
+  return parts.join('');
+}
+
+async function refreshMapMarkers(fruitFilter){
+  if(!mapInstance || !mapMarkersLayer) return;
+  const summary = await fetchMapSummary(fruitFilter);
+
+  mapMarkersLayer.clearLayers();
   state.doiList.forEach(d => {
     if(d.latitude == null || d.longitude == null) return;
-    const isAlert = disasterDoiIds.has(d.id);
+    const s = summary[d.id];
+    const isAlert = !!(s && s.alert);
     const marker = L.circleMarker([d.latitude, d.longitude], {
       radius: 9,
       fillColor: isAlert ? '#B84B32' : '#1F4B3F',
       color: '#fff', weight: 2, fillOpacity: 0.9
-    }).addTo(map);
-    marker.bindPopup(`<strong>${d.name}</strong><br>${d.province||''}${isAlert ? '<br><span style="color:#B84B32;">⚠ มีรายงานภัยพิบัติใหม่</span>' : ''}`);
+    });
+    marker.bindPopup(buildDoiPopupHtml(d, s));
+    marker.on('mouseover', function(){ this.openPopup(); });
+    marker.on('mouseout', function(){ this.closePopup(); });
+    marker.addTo(mapMarkersLayer);
   });
 }
 
-async function renderTableTab(container, fruitFilter){
+async function renderMapTab(container, fruitFilter){
+  if(mapInstance){ mapInstance.remove(); mapInstance = null; mapMarkersLayer = null; }
+
+  container.innerHTML = `<div class="card"><div id="map"></div><p class="muted" style="margin-top:10px;">จุดสีแดง = มีรายงานภัยพิบัติที่ยังไม่ได้รับทราบ${fruitFilter!=='all' ? ` (เฉพาะ${fruitFilter} หรือกระทบทั้งดอย)` : ''} &nbsp;•&nbsp; จุดสีเขียว = ปกติ &nbsp;•&nbsp; เอาเมาส์ไปวางที่จุดเพื่อดูรายละเอียด — แผนที่จะอัปเดตอัตโนมัติเมื่อมีข้อมูลใหม่เข้ามา</p></div>`;
+
+  mapInstance = L.map('map').setView([18.7, 99.0], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(mapInstance);
+  mapMarkersLayer = L.layerGroup().addTo(mapInstance);
+
+  await refreshMapMarkers(fruitFilter);
+
+  teardownMapRealtime();
+  mapRealtimeChannel = sb.channel('map-live-updates')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'disaster_reports' }, () => refreshMapMarkers(fruitFilter))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'growth_reports' }, () => refreshMapMarkers(fruitFilter))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'seasons' }, () => refreshMapMarkers(fruitFilter))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_shipments' }, () => refreshMapMarkers(fruitFilter))
+    .subscribe();
+}
+
+async function renderTableTab(container){
+  const filters = state.centralTableFilters;
   container.innerHTML = `<div class="card"><div class="empty">กำลังรวบรวมข้อมูล...</div></div>`;
 
+  const fruitNames = await getAllFruitNames();
+  const doiOptions = `<option value="all">ทุกดอย</option>` +
+    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
+  const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
+    fruitNames.map(n => `<option value="${n}" ${filters.fruit===n?'selected':''}>${n}</option>`).join('');
+
+  let varietyRowsQuery = sb.from('fruit_varieties').select('variety_name').order('variety_name');
+  if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
+  const { data: varietyRows } = await varietyRowsQuery;
+  const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
+
   const { data: growth } = await sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false });
-  let seasonsQuery = sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open');
-  const { data: seasonsRaw } = await seasonsQuery;
-  const seasons = (seasonsRaw||[]).filter(s => fruitFilter === 'all' || s.fruit_types.name === fruitFilter);
+  const { data: seasonsRaw } = await sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open');
+  const seasons = (seasonsRaw||[]).filter(s =>
+    (filters.doiId === 'all' || String(s.doi_id) === String(filters.doiId)) &&
+    (filters.fruit === 'all' || s.fruit_types.name === filters.fruit) &&
+    (filters.variety === 'all' || (s.variety_name || '') === filters.variety)
+  );
 
   // latest growth status per doi+fruit
   const latestGrowth = {};
@@ -979,13 +1097,33 @@ async function renderTableTab(container, fruitFilter){
 
   container.innerHTML = `
     <div class="card">
-      <h3>สรุปสถานะรายดอย${fruitFilter!=='all' ? ` — ${fruitFilter}` : ''} (เฉพาะฤดูกาลที่กำลังดำเนินการ)</h3>
+      <h3>ตัวกรองตารางรายดอย</h3>
+      <div class="grid-2">
+        <div class="field"><label>ดอย</label><select id="tableFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>ชนิดพืช</label><select id="tableFilterFruit">${fruitOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label><select id="tableFilterVariety">${varietyOptionsHtml}</select></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>สรุปสถานะรายดอย (เฉพาะฤดูกาลที่กำลังดำเนินการ)</h3>
       <table>
         <thead><tr><th>ดอย</th><th>ผลไม้</th><th>สถานะการเจริญเติบโตล่าสุด</th><th>ประมาณการ</th><th>ส่งแล้วรวม</th><th>ส่ง 7 วันล่าสุด</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูลฤดูกาลที่เปิดอยู่</td></tr>'}</tbody>
+        <tbody>${rows || '<tr><td colspan="6" class="muted">ไม่มีข้อมูลตรงกับตัวกรองนี้</td></tr>'}</tbody>
       </table>
     </div>
   `;
+
+  document.getElementById('tableFilterDoi').onchange = (e) => {
+    state.centralTableFilters.doiId = e.target.value; renderTableTab(container);
+  };
+  document.getElementById('tableFilterFruit').onchange = (e) => {
+    state.centralTableFilters.fruit = e.target.value;
+    state.centralTableFilters.variety = 'all';
+    renderTableTab(container);
+  };
+  document.getElementById('tableFilterVariety').onchange = (e) => {
+    state.centralTableFilters.variety = e.target.value; renderTableTab(container);
+  };
 }
 
 /* ดึงข้อมูลฤดูกาลตามตัวกรอง (ดอย/ชนิดพืช/พันธุ์) แล้วรวมยอดตามปีงบประมาณ
