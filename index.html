@@ -217,8 +217,8 @@
    ตั้งค่าการเชื่อมต่อ Supabase — แทนที่ 2 บรรทัดนี้ด้วยค่าโปรเจกต์จริงของคุณ
    (Project Settings → API ใน Supabase Dashboard)
    ============================================================ */
-const SUPABASE_URL = 'https://ixjacftmfqyhowmpqhnb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml4amFjZnRtZnF5aG93bXBxaG5iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3NTM0NzYsImV4cCI6MjA5OTMyOTQ3Nn0.Hp5ZkyIiZjP-dcyHpArx73cvQN3VgFl-yk1qznYRuI8';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -244,7 +244,7 @@ let state = {
   session: null,
   profile: null,
   doiList: [],
-  activeStationTab: 'season',
+  activeStationTab: 'dashboard',
   activeCentralTab: 'map',
   centralFruitFilter: 'all',
   centralVarietyFruit: null,
@@ -460,9 +460,14 @@ function renderRejected(){
 async function renderStation(){
   const doiId = state.profile.doi_id;
   appEl.innerHTML = `
-    <h1>${state.profile.doi ? state.profile.doi.name : 'ดอยของคุณ'}</h1>
+    <div style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px;">
+      <h1>${state.profile.doi ? state.profile.doi.name : 'ดอยของคุณ'}</h1>
+      <button class="btn-primary" id="stationPrintBtn">พิมพ์รายงานของดอยนี้ (PDF)</button>
+    </div>
     <div class="tabs" id="stationTabs">
-      <button class="tab ${tabActive('season')}" data-tab="season">ประมาณการผลผลิต &amp; ยอดส่งรายสัปดาห์</button>
+      <button class="tab ${tabActive('dashboard')}" data-tab="dashboard">แดชบอร์ดของดอย</button>
+      <button class="tab ${tabActive('estimate')}" data-tab="estimate">ประมาณการผลผลิต</button>
+      <button class="tab ${tabActive('weekly')}" data-tab="weekly">ยอดส่งรายสัปดาห์</button>
       <button class="tab ${tabActive('growth')}" data-tab="growth">สถานะการเจริญเติบโต</button>
       <button class="tab ${tabActive('disaster')}" data-tab="disaster">รายงานภัยพิบัติ</button>
       <button class="tab ${tabActive('fruit')}" data-tab="fruit">ชนิดผลไม้</button>
@@ -472,11 +477,14 @@ async function renderStation(){
   document.querySelectorAll('#stationTabs .tab').forEach(btn => {
     btn.onclick = () => { state.activeStationTab = btn.dataset.tab; renderStation(); };
   });
+  document.getElementById('stationPrintBtn').onclick = () => generateStationReport(doiId);
 
   function tabActive(t){ return state.activeStationTab === t ? 'active' : ''; }
 
   const content = document.getElementById('stationContent');
-  if(state.activeStationTab === 'season') await renderSeasonTab(content, doiId);
+  if(state.activeStationTab === 'dashboard') await renderStationDashboardTab(content, doiId);
+  else if(state.activeStationTab === 'estimate') await renderEstimateTab(content, doiId);
+  else if(state.activeStationTab === 'weekly') await renderWeeklyTab(content, doiId);
   else if(state.activeStationTab === 'growth') await renderGrowthTab(content, doiId);
   else if(state.activeStationTab === 'disaster') await renderDisasterTab(content, doiId);
   else if(state.activeStationTab === 'fruit') await renderFruitTab(content, doiId);
@@ -500,15 +508,24 @@ function teardownMapRealtime(){
 }
 
 /* ---- Tab: ฤดูกาล / ประมาณการ / ยอดส่งรายสัปดาห์ ---- */
-async function renderSeasonTab(container, doiId){
+/* วันอังคารล่าสุด (รวมวันนี้ถ้าวันนี้คือวันอังคาร) — ใช้ตั้งค่าเริ่มต้นให้ฟอร์มยอดส่งรายสัปดาห์ */
+function getLastTuesdayISO(){
+  const d = new Date();
+  const day = d.getDay(); // 0=อาทิตย์, 1=จันทร์, 2=อังคาร, ...
+  const diff = (day - 2 + 7) % 7;
+  d.setDate(d.getDate() - diff);
+  return d.toISOString().slice(0,10);
+}
+
+/* ---- Tab: ประมาณการผลผลิต (เปิดฤดูกาลใหม่ + แก้ไขประมาณการ) — ทำนานๆ ครั้ง ปีละ 2-3 ครั้ง ---- */
+async function renderEstimateTab(container, doiId){
   const fruits = await getFruitTypes(doiId);
   const { data: seasons } = await sb.from('seasons')
-    .select('*, fruit_types(name), weekly_shipments(id, week_start_date, quantity, note, created_at), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name))')
+    .select('*, fruit_types(name), weekly_shipments(quantity), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name))')
     .eq('doi_id', doiId).order('created_at', { ascending: false });
 
   const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
 
-  // ดึงพันธุ์ทั้งหมดที่เกี่ยวข้องกับชนิดผลไม้ของดอยนี้ มาไว้ให้เลือกตอนเปิดฤดูกาล
   const fruitNamesInDoi = fruits.map(f => f.name);
   let varietiesByFruit = {};
   if(fruitNamesInDoi.length > 0){
@@ -526,7 +543,8 @@ async function renderSeasonTab(container, doiId){
 
   container.innerHTML = `
     <div class="card">
-      <h3>เปิดฤดูกาลใหม่</h3>
+      <h3>เปิดฤดูกาลใหม่ / ตั้งประมาณการผลผลิต</h3>
+      <p class="muted">ทำเป็นครั้งคราว (ปีละ 2-3 ครั้งต่อฤดูกาล) — ถ้าต้องการกรอกยอดส่งรายสัปดาห์ ไปที่แท็บ "ยอดส่งรายสัปดาห์" แทน</p>
       <div id="seasonMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="newSeasonFruit">${fruitOptions}</select></div>
@@ -559,7 +577,7 @@ async function renderSeasonTab(container, doiId){
       doi_id: doiId, fruit_type_id, variety_name, year_label, estimated_yield, expected_harvest_date, created_by: state.profile.id
     });
     if(error){ document.getElementById('seasonMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
-    renderSeasonTab(container, doiId);
+    renderEstimateTab(container, doiId);
   };
 
   const listEl = document.getElementById('seasonList');
@@ -569,8 +587,6 @@ async function renderSeasonTab(container, doiId){
   }
   listEl.innerHTML = seasons.map(s => {
     const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
-    const rows = (s.weekly_shipments||[]).sort((a,b)=> new Date(b.week_start_date)-new Date(a.week_start_date))
-      .map(w => `<tr><td>${w.week_start_date}</td><td>${Number(w.quantity).toLocaleString()} กก.</td><td class="muted">${w.note||''}</td></tr>`).join('');
 
     const revisions = (s.season_revisions||[]).sort((a,b)=> new Date(b.created_at)-new Date(a.created_at));
     const revisionRows = revisions.map(r => `<tr>
@@ -588,7 +604,7 @@ async function renderSeasonTab(container, doiId){
           <div><strong>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</strong> — ปีงบประมาณ ${s.year_label}
             <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
           </div>
-          <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม: ${totalShipped.toLocaleString()} กก.</div>
+          <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม (จากยอดรายสัปดาห์): ${totalShipped.toLocaleString()} กก.</div>
         </div>
 
         <button class="btn-ghost" data-toggle-estimate="${s.id}" style="padding:4px 0; color:var(--pine);">
@@ -615,42 +631,16 @@ async function renderSeasonTab(container, doiId){
             </table>
           </details>
         ` : ''}
-
-        <table>
-          <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ปริมาณ</th><th>หมายเหตุ</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="3" class="muted">ยังไม่มียอดส่งรายสัปดาห์</td></tr>'}</tbody>
-        </table>
-        <div class="grid-2" style="margin-top:12px;">
-          <div class="field"><label>สัปดาห์ที่เริ่ม (วันที่)</label><input type="date" id="wk-date-${s.id}"></div>
-          <div class="field"><label>ปริมาณส่ง (กก.)</label><input type="number" step="0.01" id="wk-qty-${s.id}"></div>
-        </div>
-        <div class="field"><label>หมายเหตุ (ถ้ามี)</label><input id="wk-note-${s.id}"></div>
-        <button class="btn-secondary" data-addweek="${s.id}">+ เพิ่มยอดส่งสัปดาห์นี้</button>
       </div>
     `;
   }).join('');
-
-  listEl.querySelectorAll('button[data-addweek]').forEach(btn => {
-    btn.onclick = async () => {
-      const seasonId = btn.dataset.addweek;
-      const week_start_date = document.getElementById(`wk-date-${seasonId}`).value;
-      const quantity = parseFloat(document.getElementById(`wk-qty-${seasonId}`).value);
-      const note = document.getElementById(`wk-note-${seasonId}`).value.trim();
-      if(!week_start_date || isNaN(quantity)){ alert('กรุณาใส่วันที่และปริมาณให้ครบ'); return; }
-      const { error } = await sb.from('weekly_shipments').insert({
-        season_id: seasonId, week_start_date, quantity, note, reported_by: state.profile.id
-      });
-      if(error){ alert(error.message); return; }
-      renderSeasonTab(container, doiId);
-    };
-  });
 
   listEl.querySelectorAll('button[data-toggle-estimate]').forEach(btn => {
     btn.onclick = () => {
       const seasonId = Number(btn.dataset.toggleEstimate);
       if(openEstimateEditors.has(seasonId)) openEstimateEditors.delete(seasonId);
       else openEstimateEditors.add(seasonId);
-      renderSeasonTab(container, doiId);
+      renderEstimateTab(container, doiId);
     };
   });
 
@@ -678,9 +668,80 @@ async function renderSeasonTab(container, doiId){
       const { error: updateErr } = await sb.from('seasons').update({ estimated_yield: newVal }).eq('id', seasonId);
       if(updateErr){ msgEl.innerHTML = `<div class="msg msg-error">${updateErr.message}</div>`; return; }
       openEstimateEditors.delete(Number(seasonId));
-      renderSeasonTab(container, doiId);
+      renderEstimateTab(container, doiId);
     };
   });
+}
+
+/* ---- Tab: ยอดส่งรายสัปดาห์ — ทำทุกวันอังคาร ออกแบบให้กรอกเร็วที่สุด ---- */
+async function renderWeeklyTab(container, doiId){
+  const { data: openSeasons } = await sb.from('seasons')
+    .select('id, year_label, variety_name, fruit_types(name)')
+    .eq('doi_id', doiId).eq('status', 'open').order('created_at', { ascending: false });
+
+  const seasonOptions = (openSeasons||[]).map(s =>
+    `<option value="${s.id}">${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''} — ปีงบประมาณ ${s.year_label}</option>`
+  ).join('');
+
+  const { data: recentShipments } = await sb.from('weekly_shipments')
+    .select('id, week_start_date, quantity, note, created_at, seasons(fruit_types(name), variety_name, year_label)')
+    .in('season_id', (openSeasons||[]).map(s => s.id).length ? (openSeasons||[]).map(s => s.id) : [0])
+    .order('week_start_date', { ascending: false })
+    .limit(20);
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>บันทึกยอดส่งรายสัปดาห์</h3>
+      <p class="muted">กรอกทุกวันอังคาร — เลือกฤดูกาลที่กำลังดำเนินการ แล้วใส่ปริมาณที่ส่งในสัปดาห์นี้</p>
+      <div id="weeklyMsg"></div>
+      ${!openSeasons || openSeasons.length === 0 ? `
+        <div class="empty">ยังไม่มีฤดูกาลที่เปิดอยู่ — ไปที่แท็บ "ประมาณการผลผลิต" เพื่อเปิดฤดูกาลก่อน</div>
+      ` : `
+        <div class="field"><label>ฤดูกาล (ชนิดผลไม้ / พันธุ์)</label><select id="wkSeasonSelect">${seasonOptions}</select></div>
+        <div class="grid-2">
+          <div class="field"><label>สัปดาห์ที่เริ่ม (วันที่)</label><input type="date" id="wkDate" value="${getLastTuesdayISO()}"></div>
+          <div class="field"><label>ปริมาณส่ง (กก.)</label><input type="number" step="0.01" id="wkQty"></div>
+        </div>
+        <div class="field"><label>หมายเหตุ (ถ้ามี)</label><input id="wkNote"></div>
+        <button class="btn-primary" id="saveWeeklyBtn">บันทึกยอดส่งสัปดาห์นี้</button>
+      `}
+    </div>
+    <div class="card">
+      <h3>ยอดส่งล่าสุด</h3>
+      <table>
+        <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ผลไม้</th><th>ปริมาณ</th><th>หมายเหตุ</th></tr></thead>
+        <tbody>
+          ${(recentShipments||[]).map(w => `<tr>
+            <td>${w.week_start_date}</td>
+            <td>${w.seasons ? `${w.seasons.fruit_types.name}${w.seasons.variety_name ? ` (${w.seasons.variety_name})` : ''} — ${w.seasons.year_label}` : '—'}</td>
+            <td>${Number(w.quantity).toLocaleString()} กก.</td>
+            <td class="muted">${w.note||''}</td>
+          </tr>`).join('') || '<tr><td colspan="4" class="muted">ยังไม่มียอดส่งรายสัปดาห์</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const saveBtn = document.getElementById('saveWeeklyBtn');
+  if(saveBtn){
+    saveBtn.onclick = async () => {
+      const season_id = document.getElementById('wkSeasonSelect').value;
+      const week_start_date = document.getElementById('wkDate').value;
+      const quantity = parseFloat(document.getElementById('wkQty').value);
+      const note = document.getElementById('wkNote').value.trim();
+      if(!week_start_date || isNaN(quantity)){
+        document.getElementById('weeklyMsg').innerHTML = `<div class="msg msg-error">กรุณาใส่วันที่และปริมาณให้ครบ</div>`;
+        return;
+      }
+      saveBtn.disabled = true; saveBtn.textContent = 'กำลังบันทึก...';
+      const { error } = await sb.from('weekly_shipments').insert({
+        season_id, week_start_date, quantity, note, reported_by: state.profile.id
+      });
+      saveBtn.disabled = false; saveBtn.textContent = 'บันทึกยอดส่งสัปดาห์นี้';
+      if(error){ document.getElementById('weeklyMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+      renderWeeklyTab(container, doiId);
+    };
+  }
 }
 
 /* ---- Tab: สถานะการเจริญเติบโต ---- */
@@ -867,6 +928,207 @@ async function renderFruitTab(container, doiId){
     if(error){ document.getElementById('fruitMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
     renderFruitTab(container, doiId);
   };
+}
+
+/* ---- Tab: แดชบอร์ดของดอย (สรุปข้อมูลเฉพาะดอยตัวเอง) ---- */
+async function renderStationDashboardTab(container, doiId){
+  container.innerHTML = `<div class="card"><div class="empty">กำลังโหลด...</div></div>`;
+
+  const [{ data: growth }, { data: seasonsRaw }, { data: disasters }] = await Promise.all([
+    sb.from('growth_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }),
+    sb.from('seasons').select('*, fruit_types(name), weekly_shipments(quantity, week_start_date)').eq('doi_id', doiId).eq('status', 'open'),
+    sb.from('disaster_reports').select('*').eq('doi_id', doiId).order('created_at', { ascending: false }).limit(5)
+  ]);
+
+  const latestGrowthByFruit = {};
+  (growth||[]).forEach(g => {
+    if(!latestGrowthByFruit[g.fruit_type_id]) latestGrowthByFruit[g.fruit_type_id] = g;
+  });
+  const growthList = Object.values(latestGrowthByFruit);
+
+  const newDisasterCount = (disasters||[]).filter(d => d.status === 'new').length;
+  const now = new Date();
+  const weekTotal = (seasonsRaw||[]).reduce((sum, s) => {
+    return sum + (s.weekly_shipments||[]).filter(w => {
+      const d = new Date(w.week_start_date);
+      const diffDays = (now - d) / (1000*60*60*24);
+      return diffDays >= 0 && diffDays <= 7;
+    }).reduce((wsum,w)=>wsum+Number(w.quantity),0);
+  }, 0);
+  const totalEstimate = (seasonsRaw||[]).reduce((sum,s)=>sum+Number(s.estimated_yield||0), 0);
+  const totalShipped = (seasonsRaw||[]).reduce((sum,s)=>sum+(s.weekly_shipments||[]).reduce((wsum,w)=>wsum+Number(w.quantity),0), 0);
+
+  container.innerHTML = `
+    <div class="card">
+      <div class="rpt-stats" style="margin:0;">
+        <div class="rpt-stat"><div class="num">${seasonsRaw ? seasonsRaw.length : 0}</div><div class="lbl">ฤดูกาลที่กำลังดำเนินการ</div></div>
+        <div class="rpt-stat"><div class="num">${totalEstimate.toLocaleString()}</div><div class="lbl">ประมาณการรวม (กก.)</div></div>
+        <div class="rpt-stat"><div class="num">${totalShipped.toLocaleString()}</div><div class="lbl">ส่งแล้วรวม (กก.)</div></div>
+        <div class="rpt-stat"><div class="num">${weekTotal.toLocaleString()}</div><div class="lbl">ส่ง 7 วันล่าสุด (กก.)</div></div>
+        <div class="rpt-stat"><div class="num">${newDisasterCount}</div><div class="lbl">ภัยพิบัติรอรับทราบ</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>สถานะการเจริญเติบโตล่าสุด</h3>
+      <table>
+        <thead><tr><th>ชนิดผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th></tr></thead>
+        <tbody>
+          ${growthList.map(g => `<tr><td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td><td><span class="badge badge-green">${g.status}</span></td><td class="muted">${g.note||''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">ยังไม่มีรายงาน</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>แนวโน้มผลผลิตของดอยนี้</h3>
+      <canvas id="stationChart" height="110"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>รายงานภัยพิบัติล่าสุด</h3>
+      <table>
+        <thead><tr><th>วันที่</th><th>ประเภท</th><th>พื้นที่</th><th>สถานะ</th></tr></thead>
+        <tbody>
+          ${(disasters||[]).map(d => `<tr><td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td><td>${d.disaster_type}</td><td class="muted">${d.affected_area}</td><td><span class="badge ${d.status==='new'?'badge-clay':(d.status==='acknowledged'?'badge-gold':'badge-green')}">${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</span></td></tr>`).join('') || '<tr><td colspan="4" class="muted">ไม่มีรายงานภัยพิบัติ</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const chartData = await fetchFilteredSeasonsForChart({ doiId: String(doiId), fruit: 'all', variety: 'all' });
+  new Chart(document.getElementById('stationChart'), {
+    type: 'bar',
+    data: {
+      labels: chartData.labels.map(y => `ปีงบประมาณ ${y}`),
+      datasets: [
+        { label: 'ประมาณการ (กก.)', data: chartData.estimatedData, backgroundColor: '#D99A2B' },
+        { label: 'ส่งจริงสะสม (กก.)', data: chartData.actualData, backgroundColor: '#1F4B3F' }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom' } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+}
+
+/* ---- รายงานสำหรับพิมพ์ เฉพาะของดอยตัวเอง (ฝั่งเจ้าหน้าที่ดอย) ---- */
+async function generateStationReport(doiId){
+  const btn = document.getElementById('stationPrintBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'กำลังสร้างรายงาน...'; }
+
+  const doiInfo = state.doiList.find(d => String(d.id) === String(doiId));
+
+  const [{ data: seasonsRaw }, { data: growth }, { data: disasters }] = await Promise.all([
+    sb.from('seasons').select('*, fruit_types(name), weekly_shipments(quantity, week_start_date)').eq('doi_id', doiId).eq('status','open'),
+    sb.from('growth_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }),
+    sb.from('disaster_reports').select('*').eq('doi_id', doiId).order('created_at', { ascending: false })
+  ]);
+
+  const latestGrowthByFruit = {};
+  (growth||[]).forEach(g => { if(!latestGrowthByFruit[g.fruit_type_id]) latestGrowthByFruit[g.fruit_type_id] = g; });
+  const growthList = Object.values(latestGrowthByFruit);
+
+  const chartData = await fetchFilteredSeasonsForChart({ doiId: String(doiId), fruit: 'all', variety: 'all' });
+
+  const seasonRows = (seasonsRaw||[]).map(s => {
+    const totalShipped = (s.weekly_shipments||[]).reduce((sum,w)=>sum+Number(w.quantity),0);
+    return `<tr>
+      <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
+      <td>${s.year_label}</td>
+      <td style="text-align:right;">${s.estimated_yield ? Number(s.estimated_yield).toLocaleString() : '—'}</td>
+      <td style="text-align:right;">${totalShipped.toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  const disasterRows = (disasters||[]).map(d => `<tr>
+      <td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td>
+      <td>${d.disaster_type}</td>
+      <td>${d.affected_area}</td>
+      <td style="text-align:right;">${d.damage_percent!=null ? d.damage_percent+'%' : '—'}</td>
+      <td>${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</td>
+    </tr>`).join('');
+
+  const now = new Date();
+  const reportEl = document.getElementById('printReport');
+  reportEl.innerHTML = `
+    <div class="rpt-header">
+      <h1>รายงานสรุปสถานการณ์ผลผลิตไม้ผล</h1>
+      <div class="rpt-meta">${doiInfo ? doiInfo.name : ''} ${doiInfo && doiInfo.province ? '('+doiInfo.province+')' : ''}</div>
+      <div class="rpt-meta">ออกรายงานวันที่ ${now.toLocaleDateString('th-TH', { year:'numeric', month:'long', day:'numeric' })} เวลา ${now.toLocaleTimeString('th-TH')}</div>
+      <div class="rpt-meta">ผู้ออกรายงาน: ${state.profile ? state.profile.full_name : ''}</div>
+    </div>
+
+    <div class="rpt-section">
+      <h2>สถานะการเจริญเติบโตล่าสุด</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">ชนิดผลไม้</th>
+          <th style="text-align:left; padding:5px;">สถานะ</th>
+          <th style="text-align:left; padding:5px;">หมายเหตุ</th>
+        </tr></thead>
+        <tbody>${growthList.map(g => `<tr><td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td><td>${g.status}</td><td>${g.note||''}</td></tr>`).join('') || '<tr><td colspan="3" style="padding:8px;">ไม่มีข้อมูล</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="rpt-section">
+      <h2>ประมาณการและยอดส่งผลผลิต</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">ชนิดผลไม้</th>
+          <th style="text-align:left; padding:5px;">ปีงบประมาณ</th>
+          <th style="text-align:right; padding:5px;">ประมาณการ (กก.)</th>
+          <th style="text-align:right; padding:5px;">ส่งแล้วรวม (กก.)</th>
+        </tr></thead>
+        <tbody>${seasonRows || '<tr><td colspan="4" style="padding:8px;">ไม่มีข้อมูล</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div class="rpt-section">
+      <h2>กราฟแนวโน้มผลผลิตรายปีงบประมาณ</h2>
+      <canvas id="reportChart" width="700" height="300" style="max-width:100%; margin-top:10px;"></canvas>
+    </div>
+
+    <div class="rpt-section">
+      <h2>รายงานภัยพิบัติทางธรรมชาติ</h2>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead><tr style="border-bottom:1px solid #999;">
+          <th style="text-align:left; padding:5px;">วันที่</th>
+          <th style="text-align:left; padding:5px;">ประเภท</th>
+          <th style="text-align:left; padding:5px;">พื้นที่กระทบ</th>
+          <th style="text-align:right; padding:5px;">เสียหาย</th>
+          <th style="text-align:left; padding:5px;">สถานะ</th>
+        </tr></thead>
+        <tbody>${disasterRows || '<tr><td colspan="5" style="padding:8px;">ไม่มีรายงานภัยพิบัติ</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  if(btn){ btn.disabled = false; btn.textContent = 'พิมพ์รายงานของดอยนี้ (PDF)'; }
+
+  const reportChartCanvas = document.getElementById('reportChart');
+  if(reportChartCanvas && chartData.labels.length > 0){
+    new Chart(reportChartCanvas, {
+      type: 'bar',
+      data: {
+        labels: chartData.labels.map(y => `ปีงบประมาณ ${y}`),
+        datasets: [
+          { label: 'ประมาณการ (กก.)', data: chartData.estimatedData, backgroundColor: '#D99A2B' },
+          { label: 'ส่งจริงสะสม (กก.)', data: chartData.actualData, backgroundColor: '#1F4B3F' }
+        ]
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { beginAtZero: true } }
+      }
+    });
+  }
+
+  await new Promise(resolve => setTimeout(resolve, 150));
+  window.print();
 }
 
 /* ============================================================
