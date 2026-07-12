@@ -359,36 +359,48 @@ function renderAuth(){
   authMode === 'login' ? renderLoginForm() : renderSignupForm();
 }
 
-/* แปลง username เป็นอีเมลปลอมสำหรับ Supabase Auth (ต้องมี @ เสมอ)
-   ถ้าผู้ใช้พิมพ์อีเมลจริงมา (มี @ อยู่แล้ว เช่น บัญชีเก่า) จะใช้ตามที่พิมพ์ ไม่แปลง */
-const USERNAME_DOMAIN = '@doi-app.local';
-function usernameToAuthEmail(input){
-  const trimmed = input.trim();
-  if(trimmed.includes('@')) return trimmed.toLowerCase();
-  return trimmed.toLowerCase() + USERNAME_DOMAIN;
+/* แปลงชื่อ-นามสกุล (ภาษาไทยได้) เป็นอีเมลปลอมสำหรับ Supabase Auth แบบตายตัว (ชื่อเดียวกัน → อีเมลเดียวกันเสมอ)
+   ถ้าผู้ใช้พิมพ์อีเมลจริงมา (มี @ อยู่แล้ว เช่น บัญชีเก่าก่อนเปลี่ยนมาใช้ชื่อ) จะใช้ตามที่พิมพ์ ไม่แปลง */
+const NAME_LOGIN_DOMAIN = '@doi-app.local';
+function normalizeNameForLogin(name){
+  return name.trim().replace(/\s+/g, ''); // ตัดช่องว่างหัวท้ายและช่องว่างตรงกลางออกทั้งหมด กันพิมพ์เว้นวรรคไม่ตรงกัน
 }
-function isValidUsername(u){
-  return /^[a-zA-Z0-9_]{3,20}$/.test(u);
+/* แฮชสั้นๆ แบบตายตัว (cyrb53-like) รองรับอักขระไทย ไม่ต้องพึ่งการ lookup ฐานข้อมูลก่อน login */
+function hashNameToHex(str){
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for(let i=0; i<str.length; i++){
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+  return (h2>>>0).toString(16).padStart(8,'0') + (h1>>>0).toString(16).padStart(8,'0');
+}
+function nameToAuthEmail(input){
+  const trimmed = input.trim();
+  if(trimmed.includes('@')) return trimmed.toLowerCase(); // บัญชีเก่าที่ยังใช้อีเมลจริง
+  return 'u' + hashNameToHex(normalizeNameForLogin(trimmed)) + NAME_LOGIN_DOMAIN;
 }
 
 function renderLoginForm(){
   const area = document.getElementById('authFormArea');
   area.innerHTML = `
     <div id="authMsg"></div>
-    <div class="field"><label>ชื่อผู้ใช้</label><input type="text" id="loginUsername" placeholder="เช่น somchai1" autocapitalize="none"></div>
+    <div class="field"><label>ชื่อ-นามสกุล</label><input type="text" id="loginName" placeholder="เช่น สมชาย ใจดี"></div>
     <div class="field"><label>รหัสผ่าน</label><input type="password" id="loginPassword"></div>
     <button class="btn-primary" style="width:100%;" id="loginBtn">เข้าสู่ระบบ</button>
   `;
   document.getElementById('loginBtn').onclick = async () => {
-    const usernameInput = document.getElementById('loginUsername').value.trim();
+    const nameInput = document.getElementById('loginName').value.trim();
     const password = document.getElementById('loginPassword').value;
     const btn = document.getElementById('loginBtn');
-    if(!usernameInput){ showAuthMsg('กรุณาใส่ชื่อผู้ใช้', true); return; }
+    if(!nameInput){ showAuthMsg('กรุณาใส่ชื่อ-นามสกุล', true); return; }
     btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ...';
-    const email = usernameToAuthEmail(usernameInput);
+    const email = nameToAuthEmail(nameInput);
     const { error } = await sb.auth.signInWithPassword({ email, password });
     btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
-    if(error){ showAuthMsg('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง', true); }
+    if(error){ showAuthMsg('ชื่อ-นามสกุล หรือรหัสผ่านไม่ถูกต้อง', true); }
   };
 }
 
@@ -397,11 +409,10 @@ function renderSignupForm(){
   const doiOptions = state.doiList.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
   area.innerHTML = `
     <div id="authMsg"></div>
-    <div class="field"><label>ชื่อ-นามสกุล</label><input type="text" id="suName"></div>
     <div class="field">
-      <label>ชื่อผู้ใช้ (สำหรับ login)</label>
-      <input type="text" id="suUsername" placeholder="เช่น somchai1" autocapitalize="none">
-      <p class="muted" style="margin-top:4px;">ใช้ตัวอักษรภาษาอังกฤษ ตัวเลข หรือขีดล่าง (_) เท่านั้น ยาว 3-20 ตัว ไม่มีเว้นวรรค — ตั้งเป็นชื่อที่จำง่าย จำเป็นต้องใช้ตอน login ทุกครั้ง</p>
+      <label>ชื่อ-นามสกุล</label>
+      <input type="text" id="suName" placeholder="เช่น สมชาย ใจดี">
+      <p class="muted" style="margin-top:4px;">ใช้ชื่อนี้ในการ login ทุกครั้ง กรุณาจำให้แม่นยำ (พิมพ์ชื่อ-นามสกุลให้เหมือนเดิมทุกครั้ง)</p>
     </div>
     <div class="field"><label>รหัสผ่าน (อย่างน้อย 6 ตัวอักษร)</label><input type="password" id="suPassword"></div>
     <div class="field">
@@ -423,16 +434,12 @@ function renderSignupForm(){
   };
   document.getElementById('signupBtn').onclick = async () => {
     const full_name = document.getElementById('suName').value.trim();
-    const usernameRaw = document.getElementById('suUsername').value.trim().toLowerCase();
     const password = document.getElementById('suPassword').value;
     const role = document.getElementById('suRole').value;
     const doi_id = role === 'station' ? (document.getElementById('suDoi').value || null) : null;
 
-    if(!full_name || !usernameRaw || password.length < 6){
+    if(!full_name || password.length < 6){
       showAuthMsg('กรุณากรอกข้อมูลให้ครบ (รหัสผ่านอย่างน้อย 6 ตัวอักษร)', true); return;
-    }
-    if(!isValidUsername(usernameRaw)){
-      showAuthMsg('ชื่อผู้ใช้ต้องเป็นตัวอักษรภาษาอังกฤษ ตัวเลข หรือขีดล่าง (_) ความยาว 3-20 ตัว', true); return;
     }
     if(role === 'station' && !doi_id){
       showAuthMsg('กรุณาเลือกดอย', true); return;
@@ -440,11 +447,11 @@ function renderSignupForm(){
     const btn = document.getElementById('signupBtn');
     btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
 
-    const authEmail = usernameToAuthEmail(usernameRaw);
+    const authEmail = nameToAuthEmail(full_name);
     const { data, error } = await sb.auth.signUp({ email: authEmail, password });
     if(error){
       const msg = /already registered|already exists/i.test(error.message)
-        ? 'ชื่อผู้ใช้นี้มีคนใช้แล้ว กรุณาตั้งชื่ออื่น'
+        ? 'มีคนใช้ชื่อ-นามสกุลนี้ในระบบแล้ว ถ้าเป็นคนละคนกัน กรุณาเพิ่มข้อมูลต่อท้ายชื่อเพื่อแยกให้ต่างกัน เช่น ใส่ชื่อดอยต่อท้าย'
         : error.message;
       showAuthMsg(msg, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return;
     }
@@ -452,17 +459,17 @@ function renderSignupForm(){
     const userId = data.user ? data.user.id : (data.session ? data.session.user.id : null);
     if(userId){
       const { error: profErr } = await sb.from('profiles').insert({
-        id: userId, full_name, email: authEmail, username: usernameRaw, role, doi_id, status: 'pending'
+        id: userId, full_name, email: authEmail, role, doi_id, status: 'pending'
       });
       if(profErr){
         const msg = /duplicate key|unique/i.test(profErr.message)
-          ? 'ชื่อผู้ใช้นี้มีคนใช้แล้ว กรุณาตั้งชื่ออื่น'
+          ? 'มีคนใช้ชื่อ-นามสกุลนี้ในระบบแล้ว กรุณาติดต่อทีมส่วนกลาง'
           : profErr.message;
         showAuthMsg(msg, true); btn.disabled=false; btn.textContent='สมัครสมาชิก'; return;
       }
     }
     btn.disabled = false; btn.textContent = 'สมัครสมาชิก';
-    showAuthMsg('สมัครสมาชิกสำเร็จ กรุณารอการอนุมัติจากทีมส่วนกลาง — จำชื่อผู้ใช้และรหัสผ่านไว้ให้ดี ใช้ login ครั้งต่อไป', false);
+    showAuthMsg('สมัครสมาชิกสำเร็จ กรุณารอการอนุมัติจากทีมส่วนกลาง — จำชื่อ-นามสกุลและรหัสผ่านไว้ให้ดี ใช้ login ครั้งต่อไป', false);
   };
 }
 
@@ -1593,10 +1600,10 @@ async function renderMembersTab(container){
       <h3>สมาชิกรอการอนุมัติ</h3>
       <div id="membersMsg"></div>
       <table>
-        <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>บทบาท</th><th>ดอย</th><th></th></tr></thead>
+        <thead><tr><th>ชื่อ</th><th>สมัครเมื่อ</th><th>บทบาท</th><th>ดอย</th><th></th></tr></thead>
         <tbody>
           ${(pending||[]).map(p => `<tr>
-            <td>${p.full_name}</td><td class="muted">${p.email}</td>
+            <td>${p.full_name}</td><td class="muted">${new Date(p.created_at).toLocaleDateString('th-TH')}</td>
             <td>${p.role === 'central' ? 'ส่วนกลาง' : 'เจ้าหน้าที่ดอย'}</td>
             <td>${p.doi ? p.doi.name : '—'}</td>
             <td>
@@ -1648,11 +1655,11 @@ async function renderUserManageTab(container){
         </select>
       </div>
       <table style="margin-top:12px;">
-        <thead><tr><th>ชื่อ</th><th>ชื่อผู้ใช้ / อีเมล</th><th>บทบาท</th><th>ดอย</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><th>ชื่อ (ใช้ login)</th><th>สมัครเมื่อ</th><th>บทบาท</th><th>ดอย</th><th>สถานะ</th><th></th></tr></thead>
         <tbody>
           ${(users||[]).map(u => `<tr>
             <td>${u.full_name}</td>
-            <td class="muted">${u.username || u.email}</td>
+            <td class="muted">${new Date(u.created_at).toLocaleDateString('th-TH')}</td>
             <td>
               <select data-role-for="${u.id}">
                 <option value="station" ${u.role==='station'?'selected':''}>เจ้าหน้าที่ดอย</option>
