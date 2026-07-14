@@ -2204,6 +2204,20 @@ async function renderAckTrackTab(container){
       .order('created_at', { ascending: false }).limit(150);
     contentEl.innerHTML = `
       <div class="card">
+        <h3>เปิดฤดูกาล / ตั้งประมาณการให้ดอย</h3>
+        <p class="muted">ใช้กรณีดอยยังไม่ได้เปิดฤดูกาลเอง หรือส่วนกลางต้องการช่วยกรอกให้ก่อน</p>
+        <div id="centralSeasonMsg"></div>
+        <div class="grid-2">
+          <div class="field"><label>ดอย</label>${doiSearchFieldHtml('centralSeasonDoi', null, { includeAll: false })}</div>
+          <div class="field"><label>ชนิดผลไม้</label><select id="centralSeasonFruit"><option value="">— เลือกดอยก่อน —</option></select></div>
+          <div class="field"><label>พันธุ์ (ถ้ามี)</label><select id="centralSeasonVariety"><option value="">— ไม่ระบุพันธุ์ —</option></select></div>
+          <div class="field"><label>ปีงบประมาณ</label><select id="centralSeasonLabel">${fiscalYearOptions().map(y => `<option value="${y}" ${y===currentFiscalYearBE()?'selected':''}>ปีงบประมาณ ${y}</option>`).join('')}</select></div>
+          <div class="field"><label>ประมาณการผลผลิต (กก.)</label><input type="number" step="0.01" id="centralSeasonEst"></div>
+          <div class="field"><label>วันที่คาดว่าจะเก็บเกี่ยว</label><input type="date" id="centralSeasonHarvest"></div>
+        </div>
+        <button class="btn-primary" id="createCentralSeasonBtn" disabled>เลือกดอยและชนิดผลไม้ก่อน</button>
+      </div>
+      <div class="card">
         <p class="muted">รายการนี้เป็นข้อมูลสำหรับดูเฉยๆ ไม่ต้องกดรับทราบ — แต่ละดอยเปิดฤดูกาลและกรอกประมาณการได้เองทันทีโดยไม่ต้องรอส่วนกลาง</p>
         <table>
           <thead><tr><th>ดอย</th><th>ผลไม้</th><th>ปีงบประมาณ</th><th>ประมาณการ</th><th>ผู้เปิดฤดูกาล</th></tr></thead>
@@ -2219,6 +2233,75 @@ async function renderAckTrackTab(container){
         </table>
       </div>
     `;
+
+    let centralSeasonDoiId = null;
+    let centralSeasonFruits = [];
+
+    async function loadFruitsForCentralSeasonDoi(){
+      const fruitSelect = document.getElementById('centralSeasonFruit');
+      const varietySelect = document.getElementById('centralSeasonVariety');
+      const createBtn = document.getElementById('createCentralSeasonBtn');
+      centralSeasonDoiId = resolveDoiIdFromInput('centralSeasonDoi', false);
+      if(!centralSeasonDoiId){
+        fruitSelect.innerHTML = '<option value="">— เลือกดอยก่อน —</option>';
+        varietySelect.innerHTML = '<option value="">— ไม่ระบุพันธุ์ —</option>';
+        createBtn.disabled = true; createBtn.textContent = 'เลือกดอยและชนิดผลไม้ก่อน';
+        return;
+      }
+      centralSeasonFruits = await getFruitTypes(centralSeasonDoiId);
+      if(centralSeasonFruits.length === 0){
+        fruitSelect.innerHTML = '<option value="">— ดอยนี้ยังไม่มีชนิดผลไม้ —</option>';
+        varietySelect.innerHTML = '<option value="">— ไม่ระบุพันธุ์ —</option>';
+        createBtn.disabled = true; createBtn.textContent = 'ดอยนี้ยังไม่มีชนิดผลไม้';
+        return;
+      }
+      fruitSelect.innerHTML = centralSeasonFruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+      await loadVarietiesForCentralSeasonFruit();
+      createBtn.disabled = false; createBtn.textContent = 'เปิดฤดูกาล';
+    }
+
+    async function loadVarietiesForCentralSeasonFruit(){
+      const varietySelect = document.getElementById('centralSeasonVariety');
+      const fruitId = document.getElementById('centralSeasonFruit').value;
+      const fruit = centralSeasonFruits.find(f => String(f.id) === String(fruitId));
+      if(!fruit){ varietySelect.innerHTML = '<option value="">— ไม่ระบุพันธุ์ —</option>'; return; }
+      const { data: varietyRows } = await sb.from('fruit_varieties').select('variety_name').eq('fruit_name', fruit.name).order('variety_name');
+      const list = (varietyRows||[]).map(v => v.variety_name);
+      varietySelect.innerHTML = `<option value="">— ไม่ระบุพันธุ์ —</option>${list.map(v => `<option value="${v}">${v}</option>`).join('')}`;
+    }
+
+    document.getElementById('centralSeasonDoi').onchange = loadFruitsForCentralSeasonDoi;
+    document.getElementById('centralSeasonFruit').onchange = loadVarietiesForCentralSeasonFruit;
+
+    document.getElementById('createCentralSeasonBtn').onclick = async () => {
+      const btn = document.getElementById('createCentralSeasonBtn');
+      const doi_id = resolveDoiIdFromInput('centralSeasonDoi', false);
+      const fruit_type_id = document.getElementById('centralSeasonFruit').value;
+      const variety_name = document.getElementById('centralSeasonVariety').value || null;
+      const year_label = document.getElementById('centralSeasonLabel').value.trim();
+      const estimated_yield = parseFloat(document.getElementById('centralSeasonEst').value) || null;
+      const expected_harvest_date = document.getElementById('centralSeasonHarvest').value || null;
+
+      if(!doi_id){
+        document.getElementById('centralSeasonMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกดอยจากรายการที่ค้นหา</div>`;
+        return;
+      }
+      if(!fruit_type_id){
+        document.getElementById('centralSeasonMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกชนิดผลไม้</div>`;
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'กำลังเปิดฤดูกาล...';
+      const { error } = await sb.from('seasons').insert({
+        doi_id, fruit_type_id, variety_name, year_label, estimated_yield, expected_harvest_date, created_by: state.profile.id
+      });
+      btn.disabled = false; btn.textContent = 'เปิดฤดูกาล';
+      if(error){
+        document.getElementById('centralSeasonMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`;
+        return;
+      }
+      document.getElementById('centralSeasonMsg').innerHTML = `<div class="msg msg-ok">เปิดฤดูกาลเรียบร้อย</div>`;
+      renderAckTrackTab(container);
+    };
 
   } else if(section === 'weekly'){
     const { data } = await sb.from('weekly_shipments')
