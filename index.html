@@ -624,7 +624,7 @@ async function renderEstimateTab(container, doiId){
   function varietyFieldHtmlFor(fruitId){
     const fruit = fruits.find(f => String(f.id) === String(fruitId));
     const list = (fruit && varietiesByFruit[fruit.name]) || [];
-    return varietySearchFieldHtml('newSeasonVariety', list, null, { includeAll: false });
+    return `<select id="newSeasonVariety"><option value="">— ไม่ระบุพันธุ์ —</option>${list.map(v => `<option value="${v}">${v}</option>`).join('')}</select>`;
   }
 
   container.innerHTML = `
@@ -651,7 +651,7 @@ async function renderEstimateTab(container, doiId){
 
   document.getElementById('createSeasonBtn').onclick = async () => {
     const fruit_type_id = document.getElementById('newSeasonFruit').value;
-    const variety_name = resolveVarietyFromInput('newSeasonVariety', false);
+    const variety_name = document.getElementById('newSeasonVariety').value || null;
     const year_label = document.getElementById('newSeasonLabel').value.trim();
     const estimated_yield = parseFloat(document.getElementById('newSeasonEst').value) || null;
     const expected_harvest_date = document.getElementById('newSeasonHarvest').value || null;
@@ -780,6 +780,8 @@ async function renderWeeklyTab(container, doiId){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const seasonOptions = openSeasons.map(s =>
     `<option value="${s.id}">${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''} — ปีงบประมาณ ${s.year_label}</option>`
@@ -807,7 +809,7 @@ async function renderWeeklyTab(container, doiId){
       <h3>ตัวกรอง</h3>
       <div class="grid-2">
         <div class="field"><label>ชนิดพืช</label><select id="wkFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('wkFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
+        <div class="field"><label>พันธุ์</label><select id="wkFilterVariety">${varietyOptionsHtml}</select></div>
       </div>
     </div>
     <div class="card">
@@ -870,8 +872,8 @@ async function renderWeeklyTab(container, doiId){
     state.stationWeeklyFilters.variety = 'all';
     renderWeeklyTab(container, doiId);
   };
-  document.getElementById('wkFilterVariety').onchange = () => {
-    state.stationWeeklyFilters.variety = resolveVarietyFromInput('wkFilterVariety', true);
+  document.getElementById('wkFilterVariety').onchange = (e) => {
+    state.stationWeeklyFilters.variety = e.target.value;
     renderWeeklyTab(container, doiId);
   };
 
@@ -919,7 +921,7 @@ async function renderGrowthTab(container, doiId){
   function varietyFieldHtmlFor(fruitId){
     const fruit = fruits.find(f => String(f.id) === String(fruitId));
     const list = (fruit && varietiesByFruit[fruit.name]) || [];
-    return varietySearchFieldHtml('growthVariety', list, null, { includeAll: false });
+    return `<select id="growthVariety"><option value="">— ไม่ระบุพันธุ์ —</option>${list.map(v => `<option value="${v}">${v}</option>`).join('')}</select>`;
   }
 
   container.innerHTML = `
@@ -953,7 +955,7 @@ async function renderGrowthTab(container, doiId){
   document.getElementById('saveGrowthBtn').onclick = async () => {
     const btn = document.getElementById('saveGrowthBtn');
     const fruit_type_id = document.getElementById('growthFruit').value;
-    const variety_name = resolveVarietyFromInput('growthVariety', false);
+    const variety_name = document.getElementById('growthVariety').value || null;
     const status = document.getElementById('growthStatus').value;
     const note = document.getElementById('growthNote').value.trim();
     const fileInput = document.getElementById('growthPhoto');
@@ -1091,6 +1093,8 @@ async function renderStationDashboardTab(container, doiId){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const dashVarietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const [{ data: growthRaw }, { data: seasonsRawAll }, { data: disastersRaw }] = await Promise.all([
     sb.from('growth_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }),
@@ -1131,7 +1135,7 @@ async function renderStationDashboardTab(container, doiId){
       <h3>ตัวกรอง</h3>
       <div class="grid-2">
         <div class="field"><label>ชนิดพืช</label><select id="dashFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('dashFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
+        <div class="field"><label>พันธุ์</label><select id="dashFilterVariety">${dashVarietyOptionsHtml}</select></div>
       </div>
     </div>
 
@@ -1176,8 +1180,8 @@ async function renderStationDashboardTab(container, doiId){
     state.stationDashboardFilters.variety = 'all';
     renderStationDashboardTab(container, doiId);
   };
-  document.getElementById('dashFilterVariety').onchange = () => {
-    state.stationDashboardFilters.variety = resolveVarietyFromInput('dashFilterVariety', true);
+  document.getElementById('dashFilterVariety').onchange = (e) => {
+    state.stationDashboardFilters.variety = e.target.value;
     renderStationDashboardTab(container, doiId);
   };
 
@@ -1359,26 +1363,6 @@ function resolveDoiIdFromInput(inputId, includeAll){
   if(!val) return includeAll ? 'all' : null;
   const match = state.doiList.find(d => d.name === val);
   return match ? String(match.id) : (includeAll ? 'all' : null);
-}
-
-function varietySearchFieldHtml(inputId, varietyNames, selectedValue, opts){
-  opts = opts || {};
-  const dlId = inputId + 'Dl';
-  const items = varietyNames.map(n => `<option value="${n}">`).join('');
-  const currentVal = (selectedValue && selectedValue !== 'all') ? selectedValue : '';
-  const placeholder = opts.includeAll ? 'ทุกพันธุ์ — พิมพ์ค้นหา...' : 'พิมพ์ค้นหาพันธุ์... (เว้นว่าง = ไม่ระบุ)';
-  return `<div class="search-field-wrap">
-    <input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
-    <button type="button" class="search-field-toggle" onclick="openSearchDropdown('${inputId}')" title="แสดงรายการทั้งหมด">▾</button>
-    <datalist id="${dlId}">${items}</datalist>
-  </div>`;
-}
-/* คืนค่าข้อความพันธุ์ที่พิมพ์ไว้ — ถ้าเว้นว่างและ includeAll เปิดอยู่ จะคืน 'all', ถ้าปิดอยู่จะคืน null (ไม่ระบุพันธุ์) */
-function resolveVarietyFromInput(inputId, includeAll){
-  const el = document.getElementById(inputId);
-  const val = el ? el.value.trim() : '';
-  if(!val) return includeAll ? 'all' : null;
-  return val;
 }
 
 async function getAllFruitNames(){
@@ -1566,6 +1550,8 @@ async function renderTableTab(container){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const tableVarietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const { data: growth } = await sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false });
   const { data: seasonsRaw } = await sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open');
@@ -1610,7 +1596,7 @@ async function renderTableTab(container){
       <div class="grid-2">
         <div class="field"><label>ดอย</label>${doiSearchFieldHtml('tableFilterDoi', filters.doiId, { includeAll: true })}</div>
         <div class="field"><label>ชนิดพืช</label><select id="tableFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('tableFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
+        <div class="field"><label>พันธุ์</label><select id="tableFilterVariety">${tableVarietyOptionsHtml}</select></div>
       </div>
     </div>
     <div class="card">
@@ -1630,8 +1616,8 @@ async function renderTableTab(container){
     state.centralTableFilters.variety = 'all';
     renderTableTab(container);
   };
-  document.getElementById('tableFilterVariety').onchange = () => {
-    state.centralTableFilters.variety = resolveVarietyFromInput('tableFilterVariety', true); renderTableTab(container);
+  document.getElementById('tableFilterVariety').onchange = (e) => {
+    state.centralTableFilters.variety = e.target.value; renderTableTab(container);
   };
 }
 
@@ -1668,6 +1654,8 @@ async function renderChartTab(container){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
+  const chartVarietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
+    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   container.innerHTML = `
     <div class="card">
@@ -1675,7 +1663,7 @@ async function renderChartTab(container){
       <div class="grid-2">
         <div class="field"><label>ดอย</label>${doiSearchFieldHtml('chartFilterDoi', filters.doiId, { includeAll: true })}</div>
         <div class="field"><label>ชนิดพืช</label><select id="chartFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('chartFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
+        <div class="field"><label>พันธุ์</label><select id="chartFilterVariety">${chartVarietyOptionsHtml}</select></div>
       </div>
       <p class="muted">กราฟแสดงยอดรวมของสิ่งที่กรองไว้ แยกตามปีงบประมาณ เพื่อดูแนวโน้มปีต่อปี</p>
     </div>
@@ -1692,8 +1680,8 @@ async function renderChartTab(container){
     state.centralChartFilters.variety = 'all';
     renderChartTab(container);
   };
-  document.getElementById('chartFilterVariety').onchange = () => {
-    state.centralChartFilters.variety = resolveVarietyFromInput('chartFilterVariety', true); renderChartTab(container);
+  document.getElementById('chartFilterVariety').onchange = (e) => {
+    state.centralChartFilters.variety = e.target.value; renderChartTab(container);
   };
 
   const { labels, estimatedData, actualData } = await fetchFilteredSeasonsForChart(filters);
