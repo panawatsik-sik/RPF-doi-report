@@ -255,6 +255,7 @@ let state = {
   centralTableFilters: { doiId: 'all', fruit: 'all', variety: 'all' },
   centralDisasterTrackFilters: { doiId: 'all', status: 'all' },
   centralUserManageFilter: 'all',
+  centralAckSection: 'status',
 };
 
 const appEl = document.getElementById('app');
@@ -442,7 +443,6 @@ function renderLoginForm(){
 
 function renderSignupForm(){
   const area = document.getElementById('authFormArea');
-  const doiOptions = state.doiList.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
   area.innerHTML = `
     <div id="authMsg"></div>
     <div class="field">
@@ -460,7 +460,7 @@ function renderSignupForm(){
     </div>
     <div class="field" id="suDoiField">
       <label>ดอย</label>
-      <select id="suDoi">${doiOptions || '<option value="">— ยังไม่มีดอยในระบบ —</option>'}</select>
+      ${state.doiList.length ? doiSearchFieldHtml('suDoi', null, { includeAll: false }) : '<p class="muted">— ยังไม่มีดอยในระบบ —</p>'}
     </div>
     <button class="btn-primary" style="width:100%;" id="signupBtn">สมัครสมาชิก</button>
     <p class="muted" style="margin-top:10px;">หลังสมัคร บัญชีของคุณจะรอการอนุมัติจากทีมส่วนกลางก่อนใช้งานได้</p>
@@ -472,13 +472,13 @@ function renderSignupForm(){
     const full_name = document.getElementById('suName').value.trim();
     const password = document.getElementById('suPassword').value;
     const role = document.getElementById('suRole').value;
-    const doi_id = role === 'station' ? (document.getElementById('suDoi').value || null) : null;
+    const doi_id = role === 'station' ? resolveDoiIdFromInput('suDoi', false) : null;
 
     if(!full_name || password.length < 6){
       showAuthMsg('กรุณากรอกข้อมูลให้ครบ (รหัสผ่านอย่างน้อย 6 ตัวอักษร)', true); return;
     }
     if(role === 'station' && !doi_id){
-      showAuthMsg('กรุณาเลือกดอย', true); return;
+      showAuthMsg('กรุณาเลือกดอยจากรายการที่ค้นหา (พิมพ์แล้วเลือกชื่อดอยให้ตรงจากรายการ)', true); return;
     }
     const btn = document.getElementById('signupBtn');
     btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
@@ -599,7 +599,7 @@ function getLastTuesdayISO(){
 async function renderEstimateTab(container, doiId){
   const fruits = await getFruitTypes(doiId);
   const { data: seasons } = await sb.from('seasons')
-    .select('*, fruit_types(name), weekly_shipments(quantity), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name))')
+    .select('*, fruit_types(name), weekly_shipments(quantity), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name)), profiles!acknowledged_by(full_name)')
     .eq('doi_id', doiId).order('created_at', { ascending: false });
 
   const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
@@ -613,10 +613,10 @@ async function renderEstimateTab(container, doiId){
       varietiesByFruit[v.fruit_name].push(v.variety_name);
     });
   }
-  function varietyOptionsFor(fruitId){
+  function varietyFieldHtmlFor(fruitId){
     const fruit = fruits.find(f => String(f.id) === String(fruitId));
     const list = (fruit && varietiesByFruit[fruit.name]) || [];
-    return `<option value="">— ไม่ระบุพันธุ์ —</option>` + list.map(v => `<option value="${v}">${v}</option>`).join('');
+    return varietySearchFieldHtml('newSeasonVariety', list, null, { includeAll: false });
   }
 
   container.innerHTML = `
@@ -626,7 +626,7 @@ async function renderEstimateTab(container, doiId){
       <div id="seasonMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="newSeasonFruit">${fruitOptions}</select></div>
-        <div class="field"><label>พันธุ์ (ถ้ามี)</label><select id="newSeasonVariety">${varietyOptionsFor(fruits[0] ? fruits[0].id : null)}</select></div>
+        <div class="field"><label>พันธุ์ (ถ้ามี)</label><div id="newSeasonVarietyWrap">${varietyFieldHtmlFor(fruits[0] ? fruits[0].id : null)}</div></div>
         <div class="field"><label>ปีงบประมาณ</label><select id="newSeasonLabel">${fiscalYearOptions().map(y => `<option value="${y}" ${y===currentFiscalYearBE()?'selected':''}>ปีงบประมาณ ${y}</option>`).join('')}</select></div>
         <div class="field"><label>ประมาณการผลผลิต (กก.)</label><input type="number" step="0.01" id="newSeasonEst"></div>
         <div class="field"><label>วันที่คาดว่าจะเก็บเกี่ยว</label><input type="date" id="newSeasonHarvest"></div>
@@ -638,12 +638,12 @@ async function renderEstimateTab(container, doiId){
   `;
 
   document.getElementById('newSeasonFruit').onchange = (e) => {
-    document.getElementById('newSeasonVariety').innerHTML = varietyOptionsFor(e.target.value);
+    document.getElementById('newSeasonVarietyWrap').innerHTML = varietyFieldHtmlFor(e.target.value);
   };
 
   document.getElementById('createSeasonBtn').onclick = async () => {
     const fruit_type_id = document.getElementById('newSeasonFruit').value;
-    const variety_name = document.getElementById('newSeasonVariety').value || null;
+    const variety_name = resolveVarietyFromInput('newSeasonVariety', false);
     const year_label = document.getElementById('newSeasonLabel').value.trim();
     const estimated_yield = parseFloat(document.getElementById('newSeasonEst').value) || null;
     const expected_harvest_date = document.getElementById('newSeasonHarvest').value || null;
@@ -683,6 +683,11 @@ async function renderEstimateTab(container, doiId){
             <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
           </div>
           <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม (จากยอดรายสัปดาห์): ${totalShipped.toLocaleString()} กก.</div>
+          <div style="margin-top:6px;">
+            ${s.acknowledged_at
+              ? `<span class="badge badge-green">ส่วนกลางรับทราบแล้ว โดย ${s.profiles ? s.profiles.full_name : ''} เมื่อ ${new Date(s.acknowledged_at).toLocaleString('th-TH')}</span>`
+              : `<span class="badge badge-gray">ส่วนกลางยังไม่รับทราบ</span>`}
+          </div>
         </div>
 
         <button class="btn-ghost" data-toggle-estimate="${s.id}" style="padding:4px 0; color:var(--pine);">
@@ -772,8 +777,6 @@ async function renderWeeklyTab(container, doiId){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
-  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
-    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const seasonOptions = openSeasons.map(s =>
     `<option value="${s.id}">${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''} — ปีงบประมาณ ${s.year_label}</option>`
@@ -781,17 +784,27 @@ async function renderWeeklyTab(container, doiId){
 
   const openSeasonIds = openSeasons.map(s => s.id);
   const { data: recentShipments } = await sb.from('weekly_shipments')
-    .select('id, week_start_date, quantity, note, created_at, seasons(fruit_types(name), variety_name, year_label)')
+    .select('id, week_start_date, quantity, note, created_at, acknowledged_at, seasons(fruit_types(name), variety_name, year_label), profiles!reported_by(full_name), ack_profile:profiles!acknowledged_by(full_name)')
     .in('season_id', openSeasonIds.length ? openSeasonIds : [0])
     .order('week_start_date', { ascending: false })
     .limit(20);
+
+  // สถานะการส่งข้อมูลของสัปดาห์นี้ (ทุกฤดูกาลที่เปิดอยู่ ไม่ขึ้นกับตัวกรอง เพื่อให้เห็นภาพรวมทั้งทีม)
+  const thisWeek = getLastTuesdayISO();
+  const allOpenSeasonIds = (openSeasonsRaw||[]).map(s => s.id);
+  const { data: thisWeekShipments } = await sb.from('weekly_shipments')
+    .select('season_id, created_at, profiles!reported_by(full_name)')
+    .eq('week_start_date', thisWeek)
+    .in('season_id', allOpenSeasonIds.length ? allOpenSeasonIds : [0]);
+  const submittedBySeasonId = {};
+  (thisWeekShipments||[]).forEach(w => { submittedBySeasonId[w.season_id] = w; });
 
   container.innerHTML = `
     <div class="card">
       <h3>ตัวกรอง</h3>
       <div class="grid-2">
         <div class="field"><label>ชนิดพืช</label><select id="wkFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label><select id="wkFilterVariety">${varietyOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('wkFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
       </div>
     </div>
     <div class="card">
@@ -811,16 +824,39 @@ async function renderWeeklyTab(container, doiId){
       `}
     </div>
     <div class="card">
+      <h3>สถานะการส่งข้อมูลสัปดาห์นี้ (เริ่ม ${thisWeek})</h3>
+      <p class="muted">ดูว่าใครในทีมส่งยอดของสัปดาห์นี้แล้ว และใครยังไม่ได้ส่ง</p>
+      <table>
+        <thead><tr><th>ชนิดผลไม้ / พันธุ์</th><th>ปีงบประมาณ</th><th>สถานะ</th></tr></thead>
+        <tbody>
+          ${(openSeasonsRaw||[]).map(s => {
+            const sub = submittedBySeasonId[s.id];
+            return `<tr>
+              <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
+              <td>${s.year_label}</td>
+              <td>${sub
+                ? `<span class="badge badge-green">ส่งแล้ว โดย ${sub.profiles ? sub.profiles.full_name : ''}</span>`
+                : `<span class="badge badge-clay">ยังไม่ส่ง</span>`}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="3" class="muted">ยังไม่มีฤดูกาลที่เปิดอยู่</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
       <h3>ยอดส่งล่าสุด${filters.fruit!=='all' ? ` — ${filters.fruit}` : ''}${filters.variety!=='all' ? ` (${filters.variety})` : ''}</h3>
       <table>
-        <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ผลไม้</th><th>ปริมาณ</th><th>หมายเหตุ</th></tr></thead>
+        <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ผลไม้</th><th>ปริมาณ</th><th>ผู้ส่ง</th><th>หมายเหตุ</th><th>สถานะรับทราบ</th></tr></thead>
         <tbody>
           ${(recentShipments||[]).map(w => `<tr>
             <td>${w.week_start_date}</td>
             <td>${w.seasons ? `${w.seasons.fruit_types.name}${w.seasons.variety_name ? ` (${w.seasons.variety_name})` : ''} — ${w.seasons.year_label}` : '—'}</td>
             <td>${Number(w.quantity).toLocaleString()} กก.</td>
+            <td class="muted">${w.profiles ? w.profiles.full_name : ''}</td>
             <td class="muted">${w.note||''}</td>
-          </tr>`).join('') || '<tr><td colspan="4" class="muted">ยังไม่มียอดส่งรายสัปดาห์ตรงกับตัวกรองนี้</td></tr>'}
+            <td>${w.acknowledged_at
+              ? `<span class="badge badge-green">รับทราบแล้วโดย ${w.ack_profile ? w.ack_profile.full_name : ''}</span>`
+              : `<span class="badge badge-gray">ยังไม่รับทราบ</span>`}</td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มียอดส่งรายสัปดาห์ตรงกับตัวกรองนี้</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -831,8 +867,8 @@ async function renderWeeklyTab(container, doiId){
     state.stationWeeklyFilters.variety = 'all';
     renderWeeklyTab(container, doiId);
   };
-  document.getElementById('wkFilterVariety').onchange = (e) => {
-    state.stationWeeklyFilters.variety = e.target.value;
+  document.getElementById('wkFilterVariety').onchange = () => {
+    state.stationWeeklyFilters.variety = resolveVarietyFromInput('wkFilterVariety', true);
     renderWeeklyTab(container, doiId);
   };
 
@@ -877,10 +913,10 @@ async function renderGrowthTab(container, doiId){
       varietiesByFruit[v.fruit_name].push(v.variety_name);
     });
   }
-  function varietyOptionsFor(fruitId){
+  function varietyFieldHtmlFor(fruitId){
     const fruit = fruits.find(f => String(f.id) === String(fruitId));
     const list = (fruit && varietiesByFruit[fruit.name]) || [];
-    return `<option value="">— ไม่ระบุพันธุ์ —</option>` + list.map(v => `<option value="${v}">${v}</option>`).join('');
+    return varietySearchFieldHtml('growthVariety', list, null, { includeAll: false });
   }
 
   container.innerHTML = `
@@ -889,7 +925,7 @@ async function renderGrowthTab(container, doiId){
       <div id="growthMsg"></div>
       <div class="grid-2">
         <div class="field"><label>ชนิดผลไม้</label><select id="growthFruit">${fruitOptions}</select></div>
-        <div class="field"><label>พันธุ์ (ถ้ามี)</label><select id="growthVariety">${varietyOptionsFor(fruits[0] ? fruits[0].id : null)}</select></div>
+        <div class="field"><label>พันธุ์ (ถ้ามี)</label><div id="growthVarietyWrap">${varietyFieldHtmlFor(fruits[0] ? fruits[0].id : null)}</div></div>
         <div class="field"><label>สถานะ</label><select id="growthStatus">${stageOptions}</select></div>
       </div>
       <div class="field"><label>หมายเหตุเพิ่มเติม (ถ้ามี)</label><textarea id="growthNote" rows="2" placeholder="เช่น ติดดอก 30% เจอน้ำค้างแข็งบางส่วน"></textarea></div>
@@ -908,13 +944,13 @@ async function renderGrowthTab(container, doiId){
   `;
 
   document.getElementById('growthFruit').onchange = (e) => {
-    document.getElementById('growthVariety').innerHTML = varietyOptionsFor(e.target.value);
+    document.getElementById('growthVarietyWrap').innerHTML = varietyFieldHtmlFor(e.target.value);
   };
 
   document.getElementById('saveGrowthBtn').onclick = async () => {
     const btn = document.getElementById('saveGrowthBtn');
     const fruit_type_id = document.getElementById('growthFruit').value;
-    const variety_name = document.getElementById('growthVariety').value || null;
+    const variety_name = resolveVarietyFromInput('growthVariety', false);
     const status = document.getElementById('growthStatus').value;
     const note = document.getElementById('growthNote').value.trim();
     const fileInput = document.getElementById('growthPhoto');
@@ -1052,8 +1088,6 @@ async function renderStationDashboardTab(container, doiId){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
-  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
-    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const [{ data: growthRaw }, { data: seasonsRawAll }, { data: disastersRaw }] = await Promise.all([
     sb.from('growth_reports').select('*, fruit_types(name)').eq('doi_id', doiId).order('created_at', { ascending: false }),
@@ -1094,7 +1128,7 @@ async function renderStationDashboardTab(container, doiId){
       <h3>ตัวกรอง</h3>
       <div class="grid-2">
         <div class="field"><label>ชนิดพืช</label><select id="dashFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label><select id="dashFilterVariety">${varietyOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('dashFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
       </div>
     </div>
 
@@ -1139,8 +1173,8 @@ async function renderStationDashboardTab(container, doiId){
     state.stationDashboardFilters.variety = 'all';
     renderStationDashboardTab(container, doiId);
   };
-  document.getElementById('dashFilterVariety').onchange = (e) => {
-    state.stationDashboardFilters.variety = e.target.value;
+  document.getElementById('dashFilterVariety').onchange = () => {
+    state.stationDashboardFilters.variety = resolveVarietyFromInput('dashFilterVariety', true);
     renderStationDashboardTab(container, doiId);
   };
 
@@ -1283,6 +1317,49 @@ async function generateStationReport(doiId){
 /* ============================================================
    CENTRAL VIEW (ส่วนกลาง) — Dashboard: แผนที่ / ตาราง / กราฟ
    ============================================================ */
+/* ============================================================
+   ช่องค้นหาแบบพิมพ์กรอง (ใช้ <input list> + <datalist> ของเบราว์เซอร์เอง)
+   ใช้แทน <select> ตรงจุดที่มีตัวเลือกเยอะ (ดอย, พันธุ์) ให้พิมพ์ค้นหาได้แทนการกดเลื่อนหา
+   ============================================================ */
+function doiSearchFieldHtml(inputId, selectedDoiId, opts){
+  opts = opts || {};
+  const dlId = inputId + 'Dl';
+  const items = state.doiList.map(d => `<option value="${d.name}">`).join('');
+  let currentVal = '';
+  if(selectedDoiId && selectedDoiId !== 'all'){
+    const match = state.doiList.find(d => String(d.id) === String(selectedDoiId));
+    currentVal = match ? match.name : '';
+  }
+  const placeholder = opts.includeAll ? 'ทุกดอย — พิมพ์ค้นหาชื่อดอย...' : 'พิมพ์ค้นหาชื่อดอย...';
+  return `<input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
+    <datalist id="${dlId}">${items}</datalist>`;
+}
+/* คืนค่า doi_id (string) ที่ตรงกับข้อความที่พิมพ์ไว้ในช่องค้นหา — ถ้าไม่พบและ includeAll เปิดอยู่ จะคืน 'all', ถ้าปิดอยู่จะคืน null */
+function resolveDoiIdFromInput(inputId, includeAll){
+  const el = document.getElementById(inputId);
+  const val = el ? el.value.trim() : '';
+  if(!val) return includeAll ? 'all' : null;
+  const match = state.doiList.find(d => d.name === val);
+  return match ? String(match.id) : (includeAll ? 'all' : null);
+}
+
+function varietySearchFieldHtml(inputId, varietyNames, selectedValue, opts){
+  opts = opts || {};
+  const dlId = inputId + 'Dl';
+  const items = varietyNames.map(n => `<option value="${n}">`).join('');
+  const currentVal = (selectedValue && selectedValue !== 'all') ? selectedValue : '';
+  const placeholder = opts.includeAll ? 'ทุกพันธุ์ — พิมพ์ค้นหา...' : 'พิมพ์ค้นหาพันธุ์... (เว้นว่าง = ไม่ระบุ)';
+  return `<input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
+    <datalist id="${dlId}">${items}</datalist>`;
+}
+/* คืนค่าข้อความพันธุ์ที่พิมพ์ไว้ — ถ้าเว้นว่างและ includeAll เปิดอยู่ จะคืน 'all', ถ้าปิดอยู่จะคืน null (ไม่ระบุพันธุ์) */
+function resolveVarietyFromInput(inputId, includeAll){
+  const el = document.getElementById(inputId);
+  const val = el ? el.value.trim() : '';
+  if(!val) return includeAll ? 'all' : null;
+  return val;
+}
+
 async function getAllFruitNames(){
   const { data } = await sb.from('fruit_types').select('name');
   const names = Array.from(new Set((data||[]).map(f => f.name)));
@@ -1309,6 +1386,7 @@ async function renderCentral(){
     <div class="tabs" id="centralTabs">
       <button class="tab ${tabActive('map')}" data-tab="map">แผนที่</button>
       <button class="tab ${tabActive('disastertrack')}" data-tab="disastertrack">ติดตามภัยพิบัติ</button>
+      <button class="tab ${tabActive('acktrack')}" data-tab="acktrack">ติดตาม/รับทราบรายงาน</button>
       <button class="tab ${tabActive('table')}" data-tab="table">ตารางรายดอย</button>
       <button class="tab ${tabActive('chart')}" data-tab="chart">กราฟภาพรวม</button>
       <button class="tab ${tabActive('members')}" data-tab="members">อนุมัติสมาชิก</button>
@@ -1334,6 +1412,7 @@ async function renderCentral(){
 
   if(state.activeCentralTab === 'map') await renderMapTab(content, fruitFilter);
   else if(state.activeCentralTab === 'disastertrack') await renderDisasterTrackTab(content);
+  else if(state.activeCentralTab === 'acktrack') await renderAckTrackTab(content);
   else if(state.activeCentralTab === 'table') await renderTableTab(content);
   else if(state.activeCentralTab === 'chart') await renderChartTab(content);
   else if(state.activeCentralTab === 'members') await renderMembersTab(content);
@@ -1459,8 +1538,6 @@ async function renderTableTab(container){
   container.innerHTML = `<div class="card"><div class="empty">กำลังรวบรวมข้อมูล...</div></div>`;
 
   const fruitNames = await getAllFruitNames();
-  const doiOptions = `<option value="all">ทุกดอย</option>` +
-    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
   const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
     fruitNames.map(n => `<option value="${n}" ${filters.fruit===n?'selected':''}>${n}</option>`).join('');
 
@@ -1468,8 +1545,6 @@ async function renderTableTab(container){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
-  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
-    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   const { data: growth } = await sb.from('growth_reports').select('*, fruit_types(name), doi(name)').order('created_at', { ascending: false });
   const { data: seasonsRaw } = await sb.from('seasons').select('*, fruit_types(name), doi(name), weekly_shipments(quantity, week_start_date)').eq('status','open');
@@ -1512,9 +1587,9 @@ async function renderTableTab(container){
     <div class="card">
       <h3>ตัวกรองตารางรายดอย</h3>
       <div class="grid-2">
-        <div class="field"><label>ดอย</label><select id="tableFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>ดอย</label>${doiSearchFieldHtml('tableFilterDoi', filters.doiId, { includeAll: true })}</div>
         <div class="field"><label>ชนิดพืช</label><select id="tableFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label><select id="tableFilterVariety">${varietyOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('tableFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
       </div>
     </div>
     <div class="card">
@@ -1526,16 +1601,16 @@ async function renderTableTab(container){
     </div>
   `;
 
-  document.getElementById('tableFilterDoi').onchange = (e) => {
-    state.centralTableFilters.doiId = e.target.value; renderTableTab(container);
+  document.getElementById('tableFilterDoi').onchange = () => {
+    state.centralTableFilters.doiId = resolveDoiIdFromInput('tableFilterDoi', true); renderTableTab(container);
   };
   document.getElementById('tableFilterFruit').onchange = (e) => {
     state.centralTableFilters.fruit = e.target.value;
     state.centralTableFilters.variety = 'all';
     renderTableTab(container);
   };
-  document.getElementById('tableFilterVariety').onchange = (e) => {
-    state.centralTableFilters.variety = e.target.value; renderTableTab(container);
+  document.getElementById('tableFilterVariety').onchange = () => {
+    state.centralTableFilters.variety = resolveVarietyFromInput('tableFilterVariety', true); renderTableTab(container);
   };
 }
 
@@ -1565,8 +1640,6 @@ async function renderChartTab(container){
   const filters = state.centralChartFilters;
   const fruitNames = await getAllFruitNames();
 
-  const doiOptions = `<option value="all">ทุกดอย</option>` +
-    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
   const fruitOptionsHtml = `<option value="all">ทุกชนิดพืช</option>` +
     fruitNames.map(n => `<option value="${n}" ${filters.fruit===n?'selected':''}>${n}</option>`).join('');
 
@@ -1574,16 +1647,14 @@ async function renderChartTab(container){
   if(filters.fruit !== 'all') varietyRowsQuery = varietyRowsQuery.eq('fruit_name', filters.fruit);
   const { data: varietyRows } = await varietyRowsQuery;
   const varietyNames = Array.from(new Set((varietyRows||[]).map(v => v.variety_name)));
-  const varietyOptionsHtml = `<option value="all">ทุกพันธุ์</option>` +
-    varietyNames.map(n => `<option value="${n}" ${filters.variety===n?'selected':''}>${n}</option>`).join('');
 
   container.innerHTML = `
     <div class="card">
       <h3>ตัวกรองกราฟภาพรวม</h3>
       <div class="grid-2">
-        <div class="field"><label>ดอย</label><select id="chartFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>ดอย</label>${doiSearchFieldHtml('chartFilterDoi', filters.doiId, { includeAll: true })}</div>
         <div class="field"><label>ชนิดพืช</label><select id="chartFilterFruit">${fruitOptionsHtml}</select></div>
-        <div class="field"><label>พันธุ์</label><select id="chartFilterVariety">${varietyOptionsHtml}</select></div>
+        <div class="field"><label>พันธุ์</label>${varietySearchFieldHtml('chartFilterVariety', varietyNames, filters.variety, { includeAll: true })}</div>
       </div>
       <p class="muted">กราฟแสดงยอดรวมของสิ่งที่กรองไว้ แยกตามปีงบประมาณ เพื่อดูแนวโน้มปีต่อปี</p>
     </div>
@@ -1592,16 +1663,16 @@ async function renderChartTab(container){
     </div>
   `;
 
-  document.getElementById('chartFilterDoi').onchange = (e) => {
-    state.centralChartFilters.doiId = e.target.value; renderChartTab(container);
+  document.getElementById('chartFilterDoi').onchange = () => {
+    state.centralChartFilters.doiId = resolveDoiIdFromInput('chartFilterDoi', true); renderChartTab(container);
   };
   document.getElementById('chartFilterFruit').onchange = (e) => {
     state.centralChartFilters.fruit = e.target.value;
     state.centralChartFilters.variety = 'all';
     renderChartTab(container);
   };
-  document.getElementById('chartFilterVariety').onchange = (e) => {
-    state.centralChartFilters.variety = e.target.value; renderChartTab(container);
+  document.getElementById('chartFilterVariety').onchange = () => {
+    state.centralChartFilters.variety = resolveVarietyFromInput('chartFilterVariety', true); renderChartTab(container);
   };
 
   const { labels, estimatedData, actualData } = await fetchFilteredSeasonsForChart(filters);
@@ -1666,10 +1737,6 @@ async function renderUserManageTab(container){
   if(filter !== 'all') query = query.eq('status', filter);
   const { data: users } = await query;
 
-  const doiOptionsFor = (currentDoiId) => state.doiList.map(d =>
-    `<option value="${d.id}" ${String(currentDoiId)===String(d.id)?'selected':''}>${d.name}</option>`
-  ).join('');
-
   container.innerHTML = `
     <div class="card">
       <h3>ผู้ใช้งานทั้งหมด</h3>
@@ -1696,10 +1763,10 @@ async function renderUserManageTab(container){
                 <option value="central" ${u.role==='central'?'selected':''}>ส่วนกลาง</option>
               </select>
             </td>
-            <td>
-              <select data-doi-for="${u.id}" ${u.role==='central'?'disabled':''}>
-                ${doiOptionsFor(u.doi_id)}
-              </select>
+            <td style="min-width:170px;">
+              <div data-doi-wrap-for="${u.id}" style="${u.role==='central'?'opacity:0.5;':''}">
+                ${doiSearchFieldHtml('umDoi' + u.id, u.doi_id, { includeAll: false })}
+              </div>
             </td>
             <td>
               <select data-status-for="${u.id}">
@@ -1722,8 +1789,11 @@ async function renderUserManageTab(container){
 
   container.querySelectorAll('select[data-role-for]').forEach(sel => {
     sel.onchange = () => {
-      const doiSelect = container.querySelector(`select[data-doi-for="${sel.dataset.roleFor}"]`);
-      doiSelect.disabled = sel.value === 'central';
+      const wrap = container.querySelector(`div[data-doi-wrap-for="${sel.dataset.roleFor}"]`);
+      const input = document.getElementById('umDoi' + sel.dataset.roleFor);
+      const isCentral = sel.value === 'central';
+      wrap.style.opacity = isCentral ? '0.5' : '1';
+      if(input) input.disabled = isCentral;
     };
   });
 
@@ -1731,11 +1801,11 @@ async function renderUserManageTab(container){
     btn.onclick = async () => {
       const userId = btn.dataset.saveUser;
       const role = container.querySelector(`select[data-role-for="${userId}"]`).value;
-      const doi_id = role === 'central' ? null : container.querySelector(`select[data-doi-for="${userId}"]`).value;
+      const doi_id = role === 'central' ? null : resolveDoiIdFromInput('umDoi' + userId, false);
       const status = container.querySelector(`select[data-status-for="${userId}"]`).value;
 
       if(role === 'station' && !doi_id){
-        document.getElementById('userManageMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกดอยสำหรับเจ้าหน้าที่ดอย</div>`;
+        document.getElementById('userManageMsg').innerHTML = `<div class="msg msg-error">กรุณาเลือกดอยจากรายการที่ค้นหาสำหรับเจ้าหน้าที่ดอย</div>`;
         return;
       }
       btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
@@ -1953,21 +2023,22 @@ async function renderDataManageTab(container){
 
   } else if(section === 'growth'){
     const { data } = await sb.from('growth_reports')
-      .select('*, doi(name), fruit_types(name)').order('created_at', { ascending: false }).limit(150);
+      .select('*, doi(name), fruit_types(name), profiles!reported_by(full_name)').order('created_at', { ascending: false }).limit(150);
     contentEl.innerHTML = `
       <div class="card">
         <div id="deleteMsg"></div>
         <table>
-          <thead><tr><th>วันที่</th><th>ดอย</th><th>ผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th></th></tr></thead>
+          <thead><tr><th>วันที่/เวลา</th><th>ดอย</th><th>ผู้ส่ง</th><th>ผลไม้</th><th>สถานะ</th><th>หมายเหตุ</th><th></th></tr></thead>
           <tbody>
             ${(data||[]).map(g => `<tr>
-              <td>${new Date(g.created_at).toLocaleDateString('th-TH')}</td>
+              <td>${new Date(g.created_at).toLocaleString('th-TH')}</td>
               <td>${g.doi.name}</td>
+              <td class="muted">${g.profiles ? g.profiles.full_name : '—'}</td>
               <td>${g.fruit_types.name}${g.variety_name ? ` (${g.variety_name})` : ''}</td>
               <td><span class="badge badge-green">${g.status}</span></td>
               <td class="muted">${g.note||''}</td>
               <td><button class="btn-ghost" data-delete-growth="${g.id}" style="color:var(--clay);">ลบ</button></td>
-            </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูล</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="7" class="muted">ยังไม่มีข้อมูล</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1983,21 +2054,22 @@ async function renderDataManageTab(container){
 
   } else if(section === 'disaster'){
     const { data } = await sb.from('disaster_reports')
-      .select('*, doi(name), fruit_types(name)').order('created_at', { ascending: false }).limit(150);
+      .select('*, doi(name), fruit_types(name), profiles!reported_by(full_name)').order('created_at', { ascending: false }).limit(150);
     contentEl.innerHTML = `
       <div class="card">
         <div id="deleteMsg"></div>
         <table>
-          <thead><tr><th>วันที่</th><th>ดอย</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>สถานะ</th><th></th></tr></thead>
+          <thead><tr><th>วันที่/เวลา</th><th>ดอย</th><th>ผู้แจ้ง</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>สถานะ</th><th></th></tr></thead>
           <tbody>
             ${(data||[]).map(d => `<tr>
-              <td>${new Date(d.created_at).toLocaleDateString('th-TH')}</td>
+              <td>${new Date(d.created_at).toLocaleString('th-TH')}</td>
               <td>${d.doi.name}</td>
+              <td class="muted">${d.profiles ? d.profiles.full_name : '—'}</td>
               <td>${d.disaster_type}</td>
               <td class="muted">${d.affected_area}</td>
               <td>${d.status==='new'?'ใหม่':(d.status==='acknowledged'?'รับทราบแล้ว':'แก้ไขแล้ว')}</td>
               <td><button class="btn-ghost" data-delete-disaster="${d.id}" style="color:var(--clay);">ลบ</button></td>
-            </tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูล</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="7" class="muted">ยังไม่มีข้อมูล</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -2018,14 +2090,11 @@ async function renderDisasterTrackTab(container){
   const filters = state.centralDisasterTrackFilters;
 
   let query = sb.from('disaster_reports')
-    .select('*, doi(name), fruit_types(name)')
+    .select('*, doi(name), fruit_types(name), profiles!reported_by(full_name)')
     .order('created_at', { ascending: false });
   if(filters.doiId !== 'all') query = query.eq('doi_id', filters.doiId);
   if(filters.status !== 'all') query = query.eq('status', filters.status);
   const { data: reports } = await query.limit(200);
-
-  const doiOptions = `<option value="all">ทุกดอย</option>` +
-    state.doiList.map(d => `<option value="${d.id}" ${String(filters.doiId)===String(d.id)?'selected':''}>${d.name}</option>`).join('');
 
   const newCount = (reports||[]).filter(r => r.status === 'new').length;
 
@@ -2035,7 +2104,7 @@ async function renderDisasterTrackTab(container){
         <div class="rpt-stat"><div class="num">${newCount}</div><div class="lbl">รอรับทราบ</div></div>
       </div>
       <div class="grid-2">
-        <div class="field"><label>กรองตามดอย</label><select id="dtFilterDoi">${doiOptions}</select></div>
+        <div class="field"><label>กรองตามดอย</label>${doiSearchFieldHtml('dtFilterDoi', filters.doiId, { includeAll: true })}</div>
         <div class="field"><label>กรองตามสถานะ</label>
           <select id="dtFilterStatus">
             <option value="all" ${filters.status==='all'?'selected':''}>ทุกสถานะ</option>
@@ -2049,11 +2118,12 @@ async function renderDisasterTrackTab(container){
     <div class="card">
       <div id="dtMsg"></div>
       <table>
-        <thead><tr><th>วันที่</th><th>ดอย</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>เสียหาย</th><th>รูป</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><th>วันที่/เวลาที่แจ้ง</th><th>ดอย</th><th>ผู้แจ้ง</th><th>ประเภท</th><th>พื้นที่กระทบ</th><th>เสียหาย</th><th>รูป</th><th>สถานะ</th><th></th></tr></thead>
         <tbody>
           ${(reports||[]).map(r => `<tr>
-            <td>${new Date(r.created_at).toLocaleDateString('th-TH')}</td>
+            <td>${new Date(r.created_at).toLocaleString('th-TH')}</td>
             <td>${r.doi.name}</td>
+            <td class="muted">${r.profiles ? r.profiles.full_name : '—'}</td>
             <td>${r.disaster_type}</td>
             <td class="muted">${r.affected_area}${r.fruit_types ? ` (${r.fruit_types.name})` : ''}</td>
             <td>${r.damage_percent!=null ? r.damage_percent+'%' : '—'}</td>
@@ -2063,14 +2133,14 @@ async function renderDisasterTrackTab(container){
               ${r.status==='new' ? `<button class="btn-secondary" data-ack="${r.id}">รับทราบ</button>` : ''}
               ${r.status==='acknowledged' ? `<button class="btn-primary" data-resolve="${r.id}">ปิดเคส (แก้ไขแล้ว)</button>` : ''}
             </td>
-          </tr>`).join('') || '<tr><td colspan="8" class="muted">ไม่มีรายงานตรงกับตัวกรองนี้</td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="9" class="muted">ไม่มีรายงานตรงกับตัวกรองนี้</td></tr>'}
         </tbody>
       </table>
     </div>
   `;
 
-  document.getElementById('dtFilterDoi').onchange = (e) => {
-    state.centralDisasterTrackFilters.doiId = e.target.value; renderDisasterTrackTab(container);
+  document.getElementById('dtFilterDoi').onchange = () => {
+    state.centralDisasterTrackFilters.doiId = resolveDoiIdFromInput('dtFilterDoi', true); renderDisasterTrackTab(container);
   };
   document.getElementById('dtFilterStatus').onchange = (e) => {
     state.centralDisasterTrackFilters.status = e.target.value; renderDisasterTrackTab(container);
@@ -2089,6 +2159,153 @@ async function renderDisasterTrackTab(container){
       renderDisasterTrackTab(container);
     };
   });
+}
+
+/* ---- Tab: รับทราบรายงาน (ส่วนกลาง) — รับทราบประมาณการรายปีงบประมาณ + รายงานประจำสัปดาห์ ---- */
+async function renderAckTrackTab(container){
+  const section = state.centralAckSection;
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>รับทราบ / ติดตามการส่งรายงาน</h3>
+      <p class="muted">ดูว่าดอยไหนส่งแล้ว ใครส่ง เวลาเท่าไหร่ และกดรับทราบเพื่อแจ้งกลับไปที่ดอย</p>
+      <div class="tabs" id="ackSubTabs" style="margin-top:10px;">
+        <button class="tab ${section==='status'?'active':''}" data-section="status">สถานะการส่ง (ใครส่งแล้ว/ยังไม่ส่ง)</button>
+        <button class="tab ${section==='estimates'?'active':''}" data-section="estimates">ประมาณการรายปีงบประมาณ</button>
+        <button class="tab ${section==='weekly'?'active':''}" data-section="weekly">รายงานประจำสัปดาห์</button>
+      </div>
+    </div>
+    <div id="ackContent"><div class="empty">กำลังโหลด...</div></div>
+  `;
+
+  container.querySelectorAll('#ackSubTabs .tab').forEach(btn => {
+    btn.onclick = () => { state.centralAckSection = btn.dataset.section; renderAckTrackTab(container); };
+  });
+
+  const contentEl = document.getElementById('ackContent');
+
+  if(section === 'status'){
+    await renderSubmissionStatusSection(contentEl);
+
+  } else if(section === 'estimates'){
+    const { data } = await sb.from('seasons')
+      .select('*, doi(name), fruit_types(name), profiles!created_by(full_name), ack_profile:profiles!acknowledged_by(full_name)')
+      .order('created_at', { ascending: false }).limit(150);
+    contentEl.innerHTML = `
+      <div class="card">
+        <div id="ackMsg"></div>
+        <table>
+          <thead><tr><th>ดอย</th><th>ผลไม้</th><th>ปีงบประมาณ</th><th>ประมาณการ</th><th>ผู้เปิดฤดูกาล</th><th>สถานะการรับทราบ</th><th></th></tr></thead>
+          <tbody>
+            ${(data||[]).map(s => `<tr>
+              <td>${s.doi.name}</td>
+              <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
+              <td>${s.year_label}</td>
+              <td>${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'}</td>
+              <td class="muted">${s.profiles ? s.profiles.full_name : '—'}<br>${new Date(s.created_at).toLocaleString('th-TH')}</td>
+              <td>${s.acknowledged_at ? `<span class="badge badge-green">รับทราบแล้วโดย ${s.ack_profile ? s.ack_profile.full_name : ''}<br>${new Date(s.acknowledged_at).toLocaleString('th-TH')}</span>` : '<span class="badge badge-clay">ยังไม่รับทราบ</span>'}</td>
+              <td>${!s.acknowledged_at ? `<button class="btn-secondary" data-ack-season="${s.id}">รับทราบ</button>` : ''}</td>
+            </tr>`).join('') || '<tr><td colspan="7" class="muted">ไม่มีข้อมูล</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+    contentEl.querySelectorAll('button[data-ack-season]').forEach(btn => {
+      btn.onclick = async () => {
+        const { error } = await sb.from('seasons').update({
+          acknowledged_by: state.profile.id, acknowledged_at: new Date().toISOString()
+        }).eq('id', btn.dataset.ackSeason);
+        if(error){ document.getElementById('ackMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+        renderAckTrackTab(container);
+      };
+    });
+
+  } else if(section === 'weekly'){
+    const { data } = await sb.from('weekly_shipments')
+      .select('*, seasons(doi(name), fruit_types(name), variety_name, year_label), profiles!reported_by(full_name), ack_profile:profiles!acknowledged_by(full_name)')
+      .order('week_start_date', { ascending: false }).limit(150);
+    contentEl.innerHTML = `
+      <div class="card">
+        <div id="ackMsg"></div>
+        <table>
+          <thead><tr><th>สัปดาห์ที่เริ่ม</th><th>ดอย</th><th>ผลไม้</th><th>ปริมาณ</th><th>ผู้ส่ง</th><th>เวลาที่ส่ง</th><th>สถานะการรับทราบ</th><th></th></tr></thead>
+          <tbody>
+            ${(data||[]).map(w => `<tr>
+              <td>${w.week_start_date}</td>
+              <td>${w.seasons ? w.seasons.doi.name : '—'}</td>
+              <td>${w.seasons ? `${w.seasons.fruit_types.name}${w.seasons.variety_name ? ` (${w.seasons.variety_name})` : ''} — ${w.seasons.year_label}` : '—'}</td>
+              <td>${Number(w.quantity).toLocaleString()} กก.</td>
+              <td class="muted">${w.profiles ? w.profiles.full_name : '—'}</td>
+              <td class="muted">${new Date(w.created_at).toLocaleString('th-TH')}</td>
+              <td>${w.acknowledged_at ? `<span class="badge badge-green">รับทราบแล้วโดย ${w.ack_profile ? w.ack_profile.full_name : ''}<br>${new Date(w.acknowledged_at).toLocaleString('th-TH')}</span>` : '<span class="badge badge-clay">ยังไม่รับทราบ</span>'}</td>
+              <td>${!w.acknowledged_at ? `<button class="btn-secondary" data-ack-weekly="${w.id}">รับทราบ</button>` : ''}</td>
+            </tr>`).join('') || '<tr><td colspan="8" class="muted">ไม่มีข้อมูล</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
+    contentEl.querySelectorAll('button[data-ack-weekly]').forEach(btn => {
+      btn.onclick = async () => {
+        const { error } = await sb.from('weekly_shipments').update({
+          acknowledged_by: state.profile.id, acknowledged_at: new Date().toISOString()
+        }).eq('id', btn.dataset.ackWeekly);
+        if(error){ document.getElementById('ackMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
+        renderAckTrackTab(container);
+      };
+    });
+  }
+}
+
+/* ---- ส่วนย่อย: สถานะการส่งข้อมูล — ส่วนกลางดูได้ว่าดอยไหนส่งยอดสัปดาห์นี้แล้ว ดอยไหนยังไม่ส่ง ---- */
+async function renderSubmissionStatusSection(contentEl){
+  contentEl.innerHTML = `<div class="card"><div class="empty">กำลังโหลด...</div></div>`;
+
+  const thisWeek = getLastTuesdayISO();
+
+  const { data: openSeasons } = await sb.from('seasons')
+    .select('id, doi_id, year_label, variety_name, doi(name), fruit_types(name)')
+    .eq('status', 'open')
+    .order('doi_id');
+
+  const openSeasonIds = (openSeasons||[]).map(s => s.id);
+  const { data: thisWeekShipments } = await sb.from('weekly_shipments')
+    .select('season_id, created_at, profiles!reported_by(full_name)')
+    .eq('week_start_date', thisWeek)
+    .in('season_id', openSeasonIds.length ? openSeasonIds : [0]);
+
+  const submittedBySeasonId = {};
+  (thisWeekShipments||[]).forEach(w => { submittedBySeasonId[w.season_id] = w; });
+
+  const totalSeasons = (openSeasons||[]).length;
+  const submittedCount = (openSeasons||[]).filter(s => submittedBySeasonId[s.id]).length;
+  const notSubmittedCount = totalSeasons - submittedCount;
+
+  contentEl.innerHTML = `
+    <div class="card">
+      <h3>สถานะยอดส่งรายสัปดาห์นี้ (เริ่ม ${thisWeek}) — ทุกดอย</h3>
+      <div class="rpt-stats" style="margin:10px 0;">
+        <div class="rpt-stat"><div class="num">${totalSeasons}</div><div class="lbl">ฤดูกาลที่กำลังดำเนินการทั้งหมด</div></div>
+        <div class="rpt-stat"><div class="num">${submittedCount}</div><div class="lbl">ส่งแล้ว</div></div>
+        <div class="rpt-stat"><div class="num">${notSubmittedCount}</div><div class="lbl">ยังไม่ส่ง</div></div>
+      </div>
+      <table>
+        <thead><tr><th>ดอย</th><th>ชนิดพืช / พันธุ์</th><th>ปีงบประมาณ</th><th>สถานะ</th><th>ผู้ส่ง</th><th>เวลาที่ส่ง</th></tr></thead>
+        <tbody>
+          ${(openSeasons||[]).map(s => {
+            const sub = submittedBySeasonId[s.id];
+            return `<tr>
+              <td>${s.doi.name}</td>
+              <td>${s.fruit_types.name}${s.variety_name ? ` (${s.variety_name})` : ''}</td>
+              <td>${s.year_label}</td>
+              <td>${sub ? '<span class="badge badge-green">ส่งแล้ว</span>' : '<span class="badge badge-clay">ยังไม่ส่ง</span>'}</td>
+              <td class="muted">${sub && sub.profiles ? sub.profiles.full_name : '—'}</td>
+              <td class="muted">${sub ? new Date(sub.created_at).toLocaleString('th-TH') : '—'}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีฤดูกาลที่เปิดอยู่ในระบบ</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 /* ============================================================
