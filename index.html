@@ -76,6 +76,14 @@
     outline-offset: 1px;
     border-color: var(--gold);
   }
+  .search-field-wrap{ display:flex; gap:6px; }
+  .search-field-wrap input{ flex:1; min-width:0; }
+  .search-field-toggle{
+    flex-shrink:0; width:38px; padding:0;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; color: var(--ink-soft); font-size: 14px;
+  }
+  .search-field-toggle:hover{ background: var(--pine-light); color: var(--pine-dark); }
   label{ font-size: 13.5px; font-weight: 600; color: var(--ink-soft); display:block; margin-bottom:4px; }
   .field{ margin-bottom: 14px; }
 
@@ -599,7 +607,7 @@ function getLastTuesdayISO(){
 async function renderEstimateTab(container, doiId){
   const fruits = await getFruitTypes(doiId);
   const { data: seasons } = await sb.from('seasons')
-    .select('*, fruit_types(name), weekly_shipments(quantity), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name)), profiles!acknowledged_by(full_name)')
+    .select('*, fruit_types(name), weekly_shipments(quantity), season_revisions(id, previous_estimated_yield, new_estimated_yield, reason, created_at, profiles(full_name))')
     .eq('doi_id', doiId).order('created_at', { ascending: false });
 
   const fruitOptions = fruits.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
@@ -683,11 +691,6 @@ async function renderEstimateTab(container, doiId){
             <span class="badge ${s.status==='open'?'badge-green':'badge-gray'}">${s.status==='open'?'กำลังดำเนินการ':'ปิดฤดูกาล'}</span>
           </div>
           <div class="muted">ประมาณการ: ${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'} &nbsp;|&nbsp; ส่งแล้วรวม (จากยอดรายสัปดาห์): ${totalShipped.toLocaleString()} กก.</div>
-          <div style="margin-top:6px;">
-            ${s.acknowledged_at
-              ? `<span class="badge badge-green">ส่วนกลางรับทราบแล้ว โดย ${s.profiles ? s.profiles.full_name : ''} เมื่อ ${new Date(s.acknowledged_at).toLocaleString('th-TH')}</span>`
-              : `<span class="badge badge-gray">ส่วนกลางยังไม่รับทราบ</span>`}
-          </div>
         </div>
 
         <button class="btn-ghost" data-toggle-estimate="${s.id}" style="padding:4px 0; color:var(--pine);">
@@ -1321,6 +1324,18 @@ async function generateStationReport(doiId){
    ช่องค้นหาแบบพิมพ์กรอง (ใช้ <input list> + <datalist> ของเบราว์เซอร์เอง)
    ใช้แทน <select> ตรงจุดที่มีตัวเลือกเยอะ (ดอย, พันธุ์) ให้พิมพ์ค้นหาได้แทนการกดเลื่อนหา
    ============================================================ */
+/* กดปุ่มนี้เพื่อเปิด dropdown ของช่องค้นหาอีกครั้ง แม้จะมีข้อความอยู่แล้วก็ตาม
+   (บางเบราว์เซอร์ไม่โชว์ตัวเลือกซ้ำถ้าข้อความในช่องตรงกับตัวเลือกที่มีอยู่แล้วพอดี) */
+function openSearchDropdown(inputId){
+  const el = document.getElementById(inputId);
+  if(!el) return;
+  el.focus();
+  if(el.showPicker){
+    try { el.showPicker(); return; } catch(e){ /* fall through */ }
+  }
+  el.select();
+}
+
 function doiSearchFieldHtml(inputId, selectedDoiId, opts){
   opts = opts || {};
   const dlId = inputId + 'Dl';
@@ -1331,8 +1346,11 @@ function doiSearchFieldHtml(inputId, selectedDoiId, opts){
     currentVal = match ? match.name : '';
   }
   const placeholder = opts.includeAll ? 'ทุกดอย — พิมพ์ค้นหาชื่อดอย...' : 'พิมพ์ค้นหาชื่อดอย...';
-  return `<input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
-    <datalist id="${dlId}">${items}</datalist>`;
+  return `<div class="search-field-wrap">
+    <input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
+    <button type="button" class="search-field-toggle" onclick="openSearchDropdown('${inputId}')" title="แสดงรายการทั้งหมด">▾</button>
+    <datalist id="${dlId}">${items}</datalist>
+  </div>`;
 }
 /* คืนค่า doi_id (string) ที่ตรงกับข้อความที่พิมพ์ไว้ในช่องค้นหา — ถ้าไม่พบและ includeAll เปิดอยู่ จะคืน 'all', ถ้าปิดอยู่จะคืน null */
 function resolveDoiIdFromInput(inputId, includeAll){
@@ -1349,8 +1367,11 @@ function varietySearchFieldHtml(inputId, varietyNames, selectedValue, opts){
   const items = varietyNames.map(n => `<option value="${n}">`).join('');
   const currentVal = (selectedValue && selectedValue !== 'all') ? selectedValue : '';
   const placeholder = opts.includeAll ? 'ทุกพันธุ์ — พิมพ์ค้นหา...' : 'พิมพ์ค้นหาพันธุ์... (เว้นว่าง = ไม่ระบุ)';
-  return `<input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
-    <datalist id="${dlId}">${items}</datalist>`;
+  return `<div class="search-field-wrap">
+    <input type="text" id="${inputId}" list="${dlId}" value="${currentVal}" placeholder="${placeholder}" autocomplete="off">
+    <button type="button" class="search-field-toggle" onclick="openSearchDropdown('${inputId}')" title="แสดงรายการทั้งหมด">▾</button>
+    <datalist id="${dlId}">${items}</datalist>
+  </div>`;
 }
 /* คืนค่าข้อความพันธุ์ที่พิมพ์ไว้ — ถ้าเว้นว่างและ includeAll เปิดอยู่ จะคืน 'all', ถ้าปิดอยู่จะคืน null (ไม่ระบุพันธุ์) */
 function resolveVarietyFromInput(inputId, includeAll){
@@ -1791,9 +1812,11 @@ async function renderUserManageTab(container){
     sel.onchange = () => {
       const wrap = container.querySelector(`div[data-doi-wrap-for="${sel.dataset.roleFor}"]`);
       const input = document.getElementById('umDoi' + sel.dataset.roleFor);
+      const toggleBtn = wrap ? wrap.querySelector('.search-field-toggle') : null;
       const isCentral = sel.value === 'central';
       wrap.style.opacity = isCentral ? '0.5' : '1';
       if(input) input.disabled = isCentral;
+      if(toggleBtn) toggleBtn.disabled = isCentral;
     };
   });
 
@@ -2189,13 +2212,13 @@ async function renderAckTrackTab(container){
 
   } else if(section === 'estimates'){
     const { data } = await sb.from('seasons')
-      .select('*, doi(name), fruit_types(name), profiles!created_by(full_name), ack_profile:profiles!acknowledged_by(full_name)')
+      .select('*, doi(name), fruit_types(name), profiles!created_by(full_name)')
       .order('created_at', { ascending: false }).limit(150);
     contentEl.innerHTML = `
       <div class="card">
-        <div id="ackMsg"></div>
+        <p class="muted">รายการนี้เป็นข้อมูลสำหรับดูเฉยๆ ไม่ต้องกดรับทราบ — แต่ละดอยเปิดฤดูกาลและกรอกประมาณการได้เองทันทีโดยไม่ต้องรอส่วนกลาง</p>
         <table>
-          <thead><tr><th>ดอย</th><th>ผลไม้</th><th>ปีงบประมาณ</th><th>ประมาณการ</th><th>ผู้เปิดฤดูกาล</th><th>สถานะการรับทราบ</th><th></th></tr></thead>
+          <thead><tr><th>ดอย</th><th>ผลไม้</th><th>ปีงบประมาณ</th><th>ประมาณการ</th><th>ผู้เปิดฤดูกาล</th></tr></thead>
           <tbody>
             ${(data||[]).map(s => `<tr>
               <td>${s.doi.name}</td>
@@ -2203,22 +2226,11 @@ async function renderAckTrackTab(container){
               <td>${s.year_label}</td>
               <td>${s.estimated_yield ? Number(s.estimated_yield).toLocaleString()+' กก.' : '—'}</td>
               <td class="muted">${s.profiles ? s.profiles.full_name : '—'}<br>${new Date(s.created_at).toLocaleString('th-TH')}</td>
-              <td>${s.acknowledged_at ? `<span class="badge badge-green">รับทราบแล้วโดย ${s.ack_profile ? s.ack_profile.full_name : ''}<br>${new Date(s.acknowledged_at).toLocaleString('th-TH')}</span>` : '<span class="badge badge-clay">ยังไม่รับทราบ</span>'}</td>
-              <td>${!s.acknowledged_at ? `<button class="btn-secondary" data-ack-season="${s.id}">รับทราบ</button>` : ''}</td>
-            </tr>`).join('') || '<tr><td colspan="7" class="muted">ไม่มีข้อมูล</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="5" class="muted">ไม่มีข้อมูล</td></tr>'}
           </tbody>
         </table>
       </div>
     `;
-    contentEl.querySelectorAll('button[data-ack-season]').forEach(btn => {
-      btn.onclick = async () => {
-        const { error } = await sb.from('seasons').update({
-          acknowledged_by: state.profile.id, acknowledged_at: new Date().toISOString()
-        }).eq('id', btn.dataset.ackSeason);
-        if(error){ document.getElementById('ackMsg').innerHTML = `<div class="msg msg-error">${error.message}</div>`; return; }
-        renderAckTrackTab(container);
-      };
-    });
 
   } else if(section === 'weekly'){
     const { data } = await sb.from('weekly_shipments')
